@@ -24,6 +24,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   final ApiService _apiService = ApiService();
 
   List<XFile> _selectedPhotos = [];
+  XFile? _selectedVideo;
   bool _isUploading = false;
 
   @override
@@ -34,109 +35,116 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
 
   Future<void> _selectPhotos() async {
     try {
-      final photos = await _picker.pickMultiImage(
-        imageQuality: 100,
-      );
-
+      final photos = await _picker.pickMultiImage(imageQuality: 100);
       if (!mounted) return;
-
       setState(() {
         _selectedPhotos = photos;
+        _selectedVideo = null;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
-
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Failed to select photos.'),
-        ),
+        const SnackBar(content: Text('Failed to select photos.')),
       );
     }
   }
 
-  Future<void> _uploadPhotos() async {
-    if (_selectedPhotos.isEmpty || _isUploading) {
+  Future<void> _selectVideo() async {
+    try {
+      final video = await _picker.pickVideo(source: ImageSource.gallery);
+      if (!mounted || video == null) return;
+      setState(() {
+        _selectedVideo = video;
+        _selectedPhotos = [];
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to select video.')),
+      );
+    }
+  }
+
+  Future<void> _uploadSelectedMedia() async {
+    if ((_selectedPhotos.isEmpty && _selectedVideo == null) || _isUploading) {
       return;
     }
 
-    setState(() {
-      _isUploading = true;
-    });
+    setState(() => _isUploading = true);
 
     try {
       int uploadedCount = 0;
 
-      for (final photo in _selectedPhotos) {
-        final uploadedPhoto = await _apiService.uploadPhoto(photo);
-
+      if (_selectedVideo != null) {
+        final uploaded = await _apiService.uploadPhoto(_selectedVideo!);
         if (widget.albumId != null) {
-          await _apiService.addPhotoToAlbum(
-            widget.albumId!,
-            uploadedPhoto.id,
-          );
+          await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
         }
-
-        uploadedCount++;
+        uploadedCount = 1;
+      } else {
+        for (final photo in _selectedPhotos) {
+          final uploaded = await _apiService.uploadPhoto(photo);
+          if (widget.albumId != null) {
+            await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
+          }
+          uploadedCount++;
+        }
       }
 
       if (!mounted) return;
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             widget.albumId != null
-                ? '$uploadedCount photo(s) added to album.'
-                : '$uploadedCount photo(s) uploaded successfully.',
+                ? '$uploadedCount media item(s) added to album.'
+                : '$uploadedCount media item(s) uploaded successfully.',
           ),
         ),
       );
-
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
-
+      setState(() => _isUploading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Photo upload failed: $e',
-          ),
-        ),
+        SnackBar(content: Text('Upload failed: $e')),
       );
-
-      setState(() {
-        _isUploading = false;
-      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.albumId != null
-        ? 'Add Photos'
-        : 'Upload Photos';
+    final title = widget.albumId != null ? 'Add Media' : 'Upload Media';
+    final hasSelection = _selectedPhotos.isNotEmpty || _selectedVideo != null;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(title),
-      ),
+      appBar: AppBar(title: Text(title)),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
             Expanded(
-              child: _selectedPhotos.isEmpty
-                  ? _buildEmptyState()
-                  : _buildPhotoGrid(),
+              child: hasSelection ? _buildPreview() : _buildEmptyState(),
             ),
             const SizedBox(height: 16),
-            if (_selectedPhotos.isEmpty)
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: _selectPhotos,
-                  icon: const Icon(Icons.photo_library),
-                  label: const Text('Select Photos'),
-                ),
+            if (!hasSelection)
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _selectPhotos,
+                      icon: const Icon(Icons.photo_library),
+                      label: const Text('Photos'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _selectVideo,
+                      icon: const Icon(Icons.videocam),
+                      label: const Text('Video'),
+                    ),
+                  ),
+                ],
               )
             else
               Row(
@@ -150,17 +158,17 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
-                      onPressed: _isUploading ? null : _uploadPhotos,
+                      onPressed: _isUploading ? null : _uploadSelectedMedia,
                       child: _isUploading
                           ? const SizedBox(
                               height: 20,
                               width: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                              ),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : Text(
-                              'Upload ${_selectedPhotos.length}',
+                              _selectedVideo != null
+                                  ? 'Upload Video'
+                                  : 'Upload ${_selectedPhotos.length}',
                             ),
                     ),
                   ),
@@ -177,25 +185,39 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(
-            Icons.photo_library_outlined,
-            size: 64,
-          ),
+          const Icon(Icons.perm_media_outlined, size: 64),
           const SizedBox(height: 16),
           Text(
             widget.albumId != null
-                ? 'Select photos to add'
-                : 'Select photos to upload',
-            style: const TextStyle(
-              fontSize: 18,
-            ),
+                ? 'Select photos or a video to add'
+                : 'Select photos or a video to upload',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 18),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPhotoGrid() {
+  Widget _buildPreview() {
+    if (_selectedVideo != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.video_file, size: 96),
+            const SizedBox(height: 16),
+            Text(
+              _selectedVideo!.name,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      );
+    }
+
     return GridView.builder(
       itemCount: _selectedPhotos.length,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -205,18 +227,13 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
       ),
       itemBuilder: (context, index) {
         final photo = _selectedPhotos[index];
-
         return ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: Image.file(
             File(photo.path),
             fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) {
-              return Container(
-                color: Colors.grey.shade300,
-                child: const Icon(Icons.image),
-              );
-            },
+            errorBuilder: (context, error, stackTrace) =>
+                const Center(child: Icon(Icons.image)),
           ),
         );
       },
