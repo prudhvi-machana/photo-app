@@ -4,8 +4,6 @@ import 'screens/albums_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_service.dart';
 import 'services/auth_service.dart';
-import 'services/transfer_manager.dart';
-import 'widgets/transfer_indicator.dart';
 
 void main() {
   runApp(const PhotoStorageApp());
@@ -20,17 +18,11 @@ class PhotoStorageApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Photo Storage',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+        ),
         useMaterial3: true,
       ),
-      builder: (context, child) {
-        return Stack(
-          children: [
-            child ?? const SizedBox.shrink(),
-            const TransferIndicator(),
-          ],
-        );
-      },
       home: const StartupScreen(),
     );
   }
@@ -64,13 +56,17 @@ class _StartupScreenState extends State<StartupScreen> {
     try {
       _apiService.setToken(token);
       await _apiService.getCurrentUser();
-      await TransferManager.instance.initialize();
 
       if (!mounted) return;
+
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => AlbumsScreen(token: token)),
+        MaterialPageRoute(
+          builder: (_) => AlbumsScreen(token: token),
+        ),
       );
     } catch (_) {
+      // The stored token is no longer valid. Remove it so the next launch
+      // does not repeatedly try the same invalid session.
       await _authService.logout();
       _showLogin();
     }
@@ -78,13 +74,20 @@ class _StartupScreenState extends State<StartupScreen> {
 
   void _showLogin() {
     if (!mounted) return;
+
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      MaterialPageRoute(
+        builder: (_) => const LoginScreen(),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return const Scaffold(
+      body: Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
   }
 }
