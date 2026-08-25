@@ -1,43 +1,30 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../models/photo.dart';
-import '../services/api_service.dart';
 import '../services/api_config.dart';
+import '../services/transfer_manager.dart';
 
 class PhotoViewerScreen extends StatefulWidget {
   final List<Photo> photos;
   final int initialIndex;
   final String token;
 
-  const PhotoViewerScreen({
-    super.key,
-    required this.photos,
-    required this.initialIndex,
-    required this.token,
-  });
+  const PhotoViewerScreen({super.key, required this.photos, required this.initialIndex, required this.token});
 
   @override
   State<PhotoViewerScreen> createState() => _PhotoViewerScreenState();
 }
 
 class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
-  static const MethodChannel _mediaStore = MethodChannel('photo_app/media_store');
-
-  late final PageController _pageController;
-  final ApiService _apiService = ApiService();
   int _currentIndex = 0;
-  bool _isDownloading = false;
 
   @override
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex;
-    _pageController = PageController(initialPage: widget.initialIndex);
-    _apiService.setToken(widget.token);
+    TransferManager.instance.initialize();
   }
 
   Photo get _currentPhoto => widget.photos[_currentIndex];
@@ -45,56 +32,21 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
   bool _isVideo(Photo photo) {
     final mime = photo.mimeType.toLowerCase();
     if (mime.startsWith('video/')) return true;
-
     final name = photo.originalFilename.toLowerCase();
-    return const ['.mp4', '.mov', '.m4v', '.webm', '.3gp']
-        .any(name.endsWith);
+    return const ['.mp4', '.mov', '.m4v', '.webm', '.3gp'].any(name.endsWith);
   }
 
   Future<void> _downloadCurrent() async {
-    if (_isDownloading) return;
-
-    setState(() => _isDownloading = true);
     try {
-      final photo = _currentPhoto;
-      final file = await _apiService.downloadPhotoToTempFile(
-        photo.id,
-        photo.originalFilename,
-      );
-
-      await _mediaStore.invokeMethod<String>('saveToMediaStore', {
-        'path': file.path,
-        'name': photo.originalFilename,
-        'mimeType': photo.mimeType,
-      });
-
-      if (file.existsSync()) {
-        await file.delete();
-      }
-
+      final queued = await TransferManager.instance.enqueueDownload(photo: _currentPhoto, token: widget.token);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Saved to your device gallery.')),
+        SnackBar(content: Text(queued ? 'Download added to background transfers.' : 'Could not start download.')),
       );
-    } on PlatformException catch (e) {
+    } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Failed to save media.')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Download failed: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _isDownloading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed to start: $error')));
     }
-  }
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
   }
 
   @override
@@ -105,25 +57,13 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         actions: [
-          IconButton(
-            onPressed: _isDownloading ? null : _downloadCurrent,
-            icon: _isDownloading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.download),
-            tooltip: 'Save to device',
-          ),
+          IconButton(onPressed: _downloadCurrent, icon: const Icon(Icons.download), tooltip: 'Download'),
         ],
       ),
       body: PageView.builder(
-        controller: _pageController,
+        controller: PageController(initialPage: widget.initialIndex),
         itemCount: widget.photos.length,
-        onPageChanged: (index) {
-          setState(() => _currentIndex = index);
-        },
+        onPageChanged: (index) => setState(() => _currentIndex = index),
         itemBuilder: (context, index) {
           final photo = widget.photos[index];
           return _isVideo(photo)
@@ -138,7 +78,6 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
 class _ImageViewer extends StatelessWidget {
   final Photo photo;
   final String token;
-
   const _ImageViewer({required this.photo, required this.token});
 
   @override
@@ -147,19 +86,12 @@ class _ImageViewer extends StatelessWidget {
       child: InteractiveViewer(
         minScale: 1.0,
         maxScale: 4.0,
-        panEnabled: true,
-        scaleEnabled: true,
         child: Image.network(
           '${ApiConfig.baseUrl}/photos/${photo.id}',
           headers: {'Authorization': 'Bearer $token'},
           fit: BoxFit.contain,
-          loadingBuilder: (context, child, progress) {
-            if (progress == null) return child;
-            return const CircularProgressIndicator(color: Colors.white);
-          },
-          errorBuilder: (context, error, stackTrace) => const Center(
-            child: Icon(Icons.broken_image, color: Colors.white, size: 60),
-          ),
+          loadingBuilder: (context, child, progress) => progress == null ? child : const CircularProgressIndicator(color: Colors.white),
+          errorBuilder: (context, error, stackTrace) => const Icon(Icons.broken_image, color: Colors.white, size: 60),
         ),
       ),
     );
@@ -169,7 +101,6 @@ class _ImageViewer extends StatelessWidget {
 class _VideoViewer extends StatefulWidget {
   final Photo photo;
   final String token;
-
   const _VideoViewer({required this.photo, required this.token});
 
   @override
@@ -184,13 +115,9 @@ class _VideoViewerState extends State<_VideoViewer> {
   @override
   void initState() {
     super.initState();
-    final url = '${ApiConfig.baseUrl}/photos/${widget.photo.id}';
     _controller = VideoPlayerController.networkUrl(
-      Uri.parse(url),
-      httpHeaders: {
-        'Authorization': 'Bearer ${widget.token}',
-        'Accept': 'video/*',
-      },
+      Uri.parse('${ApiConfig.baseUrl}/photos/${widget.photo.id}'),
+      httpHeaders: {'Authorization': 'Bearer ${widget.token}', 'Accept': 'video/mp4'},
     );
     _initialize();
   }
@@ -221,26 +148,14 @@ class _VideoViewerState extends State<_VideoViewer> {
           children: [
             const Icon(Icons.error_outline, color: Colors.white, size: 60),
             const SizedBox(height: 12),
-            const Text(
-              'Unable to play this video.',
-              style: TextStyle(color: Colors.white),
-            ),
+            const Text('Unable to play this video.', style: TextStyle(color: Colors.white)),
             const SizedBox(height: 8),
-            Text(
-              'The video may use an unsupported Android codec.',
-              style: TextStyle(color: Colors.white70, fontSize: 12),
-              textAlign: TextAlign.center,
-            ),
+            Text('Player error: $_error', style: const TextStyle(color: Colors.white70, fontSize: 11), textAlign: TextAlign.center),
           ],
         ),
       );
     }
-
-    if (!_initialized) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      );
-    }
+    if (!_initialized) return const Center(child: CircularProgressIndicator(color: Colors.white));
 
     return Center(
       child: AspectRatio(
@@ -250,37 +165,14 @@ class _VideoViewerState extends State<_VideoViewer> {
           children: [
             VideoPlayer(_controller),
             GestureDetector(
-              onTap: () {
-                setState(() {
-                  _controller.value.isPlaying
-                      ? _controller.pause()
-                      : _controller.play();
-                });
-              },
+              onTap: () => setState(() => _controller.value.isPlaying ? _controller.pause() : _controller.play()),
               child: AnimatedOpacity(
-                opacity: _controller.value.isPlaying ? 0.0 : 1.0,
+                opacity: _controller.value.isPlaying ? 0 : 1,
                 duration: const Duration(milliseconds: 150),
-                child: const Icon(
-                  Icons.play_circle_fill,
-                  color: Colors.white,
-                  size: 72,
-                ),
+                child: const Icon(Icons.play_circle_fill, color: Colors.white, size: 72),
               ),
             ),
-            Positioned(
-              left: 12,
-              right: 12,
-              bottom: 8,
-              child: VideoProgressIndicator(
-                _controller,
-                allowScrubbing: true,
-                colors: const VideoProgressColors(
-                  playedColor: Colors.white,
-                  bufferedColor: Colors.white54,
-                  backgroundColor: Colors.white24,
-                ),
-              ),
-            ),
+            Positioned(left: 12, right: 12, bottom: 8, child: VideoProgressIndicator(_controller, allowScrubbing: true)),
           ],
         ),
       ),
