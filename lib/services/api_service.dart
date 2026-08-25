@@ -1,8 +1,9 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../models/album.dart';
 import '../models/photo.dart';
@@ -31,65 +32,36 @@ class ApiService {
     return headers;
   }
 
-  // ---------------------------------------------------------------------------
-  // Albums
-  // ---------------------------------------------------------------------------
-
   Future<List<Album>> getAlbums() async {
     final response = await http.get(
       Uri.parse('$baseUrl/albums'),
       headers: _headers,
     );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to load albums');
-    }
-
+    if (response.statusCode != 200) throw Exception('Failed to load albums');
     final List<dynamic> data = jsonDecode(response.body);
-
-    return data
-        .map((json) => Album.fromJson(json))
-        .toList();
+    return data.map((json) => Album.fromJson(json)).toList();
   }
 
   Future<Album> createAlbum(String name) async {
     final response = await http.post(
       Uri.parse('$baseUrl/albums'),
       headers: _headers,
-      body: jsonEncode({
-        'name': name,
-      }),
+      body: jsonEncode({'name': name}),
     );
-
-    if (response.statusCode != 200 &&
-        response.statusCode != 201) {
+    if (response.statusCode != 200 && response.statusCode != 201) {
       throw Exception('Failed to create album');
     }
-
-    return Album.fromJson(
-      jsonDecode(response.body),
-    );
+    return Album.fromJson(jsonDecode(response.body));
   }
 
-  Future<Album> updateAlbum(
-    int albumId,
-    String name,
-  ) async {
+  Future<Album> updateAlbum(int albumId, String name) async {
     final response = await http.patch(
       Uri.parse('$baseUrl/albums/$albumId'),
       headers: _headers,
-      body: jsonEncode({
-        'name': name,
-      }),
+      body: jsonEncode({'name': name}),
     );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to update album');
-    }
-
-    return Album.fromJson(
-      jsonDecode(response.body),
-    );
+    if (response.statusCode != 200) throw Exception('Failed to update album');
+    return Album.fromJson(jsonDecode(response.body));
   }
 
   Future<void> deleteAlbum(int albumId) async {
@@ -97,75 +69,41 @@ class ApiService {
       Uri.parse('$baseUrl/albums/$albumId'),
       headers: _headers,
     );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to delete album');
-    }
+    if (response.statusCode != 200) throw Exception('Failed to delete album');
   }
-
-  // ---------------------------------------------------------------------------
-  // Photos
-  // ---------------------------------------------------------------------------
 
   Future<List<Photo>> getRecentPhotos() async {
     final response = await http.get(
       Uri.parse('$baseUrl/photos/recent'),
       headers: _headers,
     );
-
     if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to load recent photos',
-      );
+      throw Exception('Failed to load recent photos');
     }
-
-    final List<dynamic> data =
-        jsonDecode(response.body);
-
-    return data
-        .map((json) => Photo.fromJson(json))
-        .toList();
+    final List<dynamic> data = jsonDecode(response.body);
+    return data.map((json) => Photo.fromJson(json)).toList();
   }
 
-  Future<List<Photo>> getAlbumPhotos(
-    int albumId,
-  ) async {
+  Future<List<Photo>> getAlbumPhotos(int albumId) async {
     final response = await http.get(
-      Uri.parse(
-        '$baseUrl/albums/$albumId/photos',
-      ),
+      Uri.parse('$baseUrl/albums/$albumId/photos'),
       headers: _headers,
     );
-
     if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to load album photos',
-      );
+      throw Exception('Failed to load album photos');
     }
-
-    final List<dynamic> data =
-        jsonDecode(response.body);
-
-    return data
-        .map((json) => Photo.fromJson(json))
-        .toList();
+    final List<dynamic> data = jsonDecode(response.body);
+    return data.map((json) => Photo.fromJson(json)).toList();
   }
 
-  Future<Photo> uploadPhoto(
-    XFile photo,
-  ) async {
-    if (token == null) {
-      throw Exception('Not authenticated');
-    }
+  Future<Photo> uploadPhoto(XFile photo) async {
+    if (token == null) throw Exception('Not authenticated');
 
     final request = http.MultipartRequest(
       'POST',
       Uri.parse('$baseUrl/photos/upload'),
     );
-
-    request.headers['Authorization'] =
-        'Bearer $token';
-
+    request.headers['Authorization'] = 'Bearer $token';
     request.files.add(
       await http.MultipartFile.fromPath(
         'file',
@@ -174,91 +112,75 @@ class ApiService {
       ),
     );
 
-    final streamedResponse =
-        await request.send();
-
-    final response =
-        await http.Response.fromStream(
-      streamedResponse,
-    );
-
-    if (response.statusCode != 200 &&
-        response.statusCode != 201) {
-      throw Exception(
-        'Upload failed: ${response.statusCode}',
-      );
+    final response = await request.send();
+    final body = await http.Response.fromStream(response);
+    if (body.statusCode != 200 && body.statusCode != 201) {
+      throw Exception('Upload failed: ${body.statusCode} ${body.body}');
     }
-
-    return Photo.fromJson(
-      jsonDecode(response.body),
-    );
+    return Photo.fromJson(jsonDecode(body.body));
   }
 
-  // ---------------------------------------------------------------------------
-  // Download / View
-  // ---------------------------------------------------------------------------
-
-  Future<Uint8List> downloadPhoto(
-    int photoId,
-  ) async {
+  Future<List<int>> downloadPhoto(int photoId) async {
     final response = await http.get(
       Uri.parse('$baseUrl/photos/$photoId'),
-      headers: {
-        'Authorization':
-            'Bearer ${token ?? ''}',
-      },
+      headers: {'Authorization': 'Bearer ${token ?? ''}'},
     );
-
     if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to download photo: '
-        '${response.statusCode}',
-      );
+      throw Exception('Failed to download media: ${response.statusCode}');
     }
-
     return response.bodyBytes;
   }
 
-  // ---------------------------------------------------------------------------
-  // Album Photos
-  // ---------------------------------------------------------------------------
-
-  Future<void> addPhotoToAlbum(
-    int albumId,
+  /// Streams a media file to a temporary file without keeping the whole file
+  /// in Dart memory. This is important for large videos.
+  Future<File> downloadPhotoToTempFile(
     int photoId,
+    String filename,
   ) async {
+    final request = http.Request(
+      'GET',
+      Uri.parse('$baseUrl/photos/$photoId'),
+    );
+    request.headers['Authorization'] = 'Bearer ${token ?? ''}';
+
+    final response = await http.Client().send(request);
+    if (response.statusCode != 200) {
+      throw Exception('Failed to download media: ${response.statusCode}');
+    }
+
+    final directory = await getTemporaryDirectory();
+    final safeName = filename.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+    final file = File('${directory.path}/$safeName');
+    final sink = file.openWrite();
+
+    try {
+      await response.stream.pipe(sink);
+    } catch (_) {
+      await sink.close();
+      if (file.existsSync()) file.deleteSync();
+      rethrow;
+    }
+
+    return file;
+  }
+
+  Future<void> addPhotoToAlbum(int albumId, int photoId) async {
     final response = await http.post(
-      Uri.parse(
-        '$baseUrl/albums/$albumId/photos/$photoId',
-      ),
+      Uri.parse('$baseUrl/albums/$albumId/photos/$photoId'),
       headers: _headers,
     );
-
-    if (response.statusCode != 200 &&
-        response.statusCode != 201) {
-      throw Exception(
-        'Failed to add photo to album: '
-        '${response.statusCode}',
-      );
+    if (response.statusCode != 200 && response.statusCode != 201) {
+      throw Exception('Failed to add photo to album: ${response.statusCode}');
     }
   }
 
-  Future<void> removePhotoFromAlbum(
-    int albumId,
-    int photoId,
-  ) async {
+  Future<void> removePhotoFromAlbum(int albumId, int photoId) async {
     final response = await http.delete(
-      Uri.parse(
-        '$baseUrl/albums/$albumId/photos/$photoId',
-      ),
+      Uri.parse('$baseUrl/albums/$albumId/photos/$photoId'),
       headers: _headers,
     );
-
     if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to remove photo from album: '
-        '${response.statusCode}',
-      );
+      throw Exception('Failed to remove photo from album: ${response.statusCode}');
     }
   }
 
@@ -267,124 +189,62 @@ class ApiService {
     int destinationAlbumId,
     int photoId,
   ) async {
-    await addPhotoToAlbum(
-      destinationAlbumId,
-      photoId,
-    );
-
-    await removePhotoFromAlbum(
-      currentAlbumId,
-      photoId,
-    );
+    await addPhotoToAlbum(destinationAlbumId, photoId);
+    await removePhotoFromAlbum(currentAlbumId, photoId);
   }
 
-  // ---------------------------------------------------------------------------
-  // Trash
-  // ---------------------------------------------------------------------------
-
-  Future<List<TrashPhoto>>
-      getTrashPhotos() async {
+  Future<List<TrashPhoto>> getTrashPhotos() async {
     final response = await http.get(
       Uri.parse('$baseUrl/photos/trash'),
       headers: _headers,
     );
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to load trash',
-      );
-    }
-
-    final List<dynamic> data =
-        jsonDecode(response.body);
-
-    return data
-        .map(
-          (json) => TrashPhoto.fromJson(json),
-        )
-        .toList();
+    if (response.statusCode != 200) throw Exception('Failed to load trash');
+    final List<dynamic> data = jsonDecode(response.body);
+    return data.map((json) => TrashPhoto.fromJson(json)).toList();
   }
 
-  Future<void> movePhotoToTrash(
-    int photoId,
-  ) async {
+  Future<void> movePhotoToTrash(int photoId) async {
     final response = await http.delete(
       Uri.parse('$baseUrl/photos/$photoId'),
       headers: _headers,
     );
-
     if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to move photo to trash: '
-        '${response.statusCode}',
-      );
+      throw Exception('Failed to move media to trash: ${response.statusCode}');
     }
   }
 
-  Future<void> restorePhoto(
-    int photoId,
-  ) async {
+  Future<void> restorePhoto(int photoId) async {
     final response = await http.post(
-      Uri.parse(
-        '$baseUrl/photos/trash/$photoId/restore',
-      ),
+      Uri.parse('$baseUrl/photos/trash/$photoId/restore'),
       headers: _headers,
     );
-
     if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to restore photo: '
-        '${response.statusCode}',
-      );
+      throw Exception('Failed to restore media: ${response.statusCode}');
     }
   }
 
-  Future<void> permanentlyDeletePhoto(
-    int photoId,
-  ) async {
+  Future<void> permanentlyDeletePhoto(int photoId) async {
     final response = await http.delete(
-      Uri.parse(
-        '$baseUrl/photos/trash/$photoId',
-      ),
+      Uri.parse('$baseUrl/photos/trash/$photoId'),
       headers: _headers,
     );
-
     if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to permanently delete photo: '
-        '${response.statusCode}',
-      );
+      throw Exception('Failed to permanently delete media: ${response.statusCode}');
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Backwards-compatible delete
-  // ---------------------------------------------------------------------------
-
-  Future<void> deletePhoto(
-    int photoId,
-  ) async {
+  Future<void> deletePhoto(int photoId) async {
     await movePhotoToTrash(photoId);
   }
-
-  // ---------------------------------------------------------------------------
-  // Current User
-  // ---------------------------------------------------------------------------
 
   Future<User> getCurrentUser() async {
     final response = await http.get(
       Uri.parse('$baseUrl/auth/me'),
       headers: _headers,
     );
-
     if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to load current user',
-      );
+      throw Exception('Failed to load current user');
     }
-
-    return User.fromJson(
-      jsonDecode(response.body),
-    );
+    return User.fromJson(jsonDecode(response.body));
   }
 }
