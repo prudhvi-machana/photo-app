@@ -42,7 +42,14 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
 
   Photo get _currentPhoto => widget.photos[_currentIndex];
 
-  bool _isVideo(Photo photo) => photo.mimeType.toLowerCase().startsWith('video/');
+  bool _isVideo(Photo photo) {
+    final mime = photo.mimeType.toLowerCase();
+    if (mime.startsWith('video/')) return true;
+
+    final name = photo.originalFilename.toLowerCase();
+    return const ['.mp4', '.mov', '.m4v', '.webm', '.3gp']
+        .any(name.endsWith);
+  }
 
   Future<void> _downloadCurrent() async {
     if (_isDownloading) return;
@@ -177,15 +184,26 @@ class _VideoViewerState extends State<_VideoViewer> {
   @override
   void initState() {
     super.initState();
+    final url = '${ApiConfig.baseUrl}/photos/${widget.photo.id}';
     _controller = VideoPlayerController.networkUrl(
-      Uri.parse('${ApiConfig.baseUrl}/photos/${widget.photo.id}'),
-      httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
+      Uri.parse(url),
+      httpHeaders: {
+        'Authorization': 'Bearer ${widget.token}',
+        'Accept': 'video/*',
+      },
     );
-    _controller.initialize().then((_) {
-      if (mounted) setState(() => _initialized = true);
-    }).catchError((error) {
-      if (mounted) setState(() => _error = error);
-    });
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    try {
+      await _controller.initialize();
+      if (!mounted) return;
+      setState(() => _initialized = true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error);
+    }
   }
 
   @override
@@ -197,8 +215,24 @@ class _VideoViewerState extends State<_VideoViewer> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
-      return const Center(
-        child: Icon(Icons.error_outline, color: Colors.white, size: 60),
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white, size: 60),
+            const SizedBox(height: 12),
+            const Text(
+              'Unable to play this video.',
+              style: TextStyle(color: Colors.white),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'The video may use an unsupported Android codec.',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       );
     }
 
