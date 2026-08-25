@@ -1,8 +1,7 @@
-import 'dart:async';
+import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 
 import '../models/photo.dart';
 import 'api_config.dart';
@@ -45,30 +44,32 @@ class TransferManager extends ChangeNotifier {
     _initialized = true;
 
     _downloader.registerCallbacks(
+      group: 'media-transfers',
       taskStatusCallback: _onStatus,
       taskProgressCallback: _onProgress,
     );
 
-    await _downloader.trackTasks();
+    _downloader.configureNotificationForGroup(
+      'media-transfers',
+      running: const TaskNotification('Photo Storage', '{displayName} • {progress}'),
+      complete: const TaskNotification('Photo Storage', '{displayName} completed'),
+      error: const TaskNotification('Photo Storage', '{displayName} failed'),
+      paused: const TaskNotification('Photo Storage', '{displayName} paused'),
+      progressBar: true,
+    );
+
+    await _downloader.trackTasksInGroup('media-transfers');
     await _downloader.resumeFromBackground();
   }
 
   void _onStatus(TaskStatusUpdate update) {
     final task = update.task;
     final type = task is UploadTask ? 'upload' : 'download';
-    final filename = task.displayName.isNotEmpty
-        ? task.displayName
-        : task.filename;
-
+    final filename = task.displayName.isNotEmpty ? task.displayName : task.filename;
     final item = _items.putIfAbsent(
       task.taskId,
-      () => TransferItem(
-        taskId: task.taskId,
-        type: type,
-        filename: filename,
-      ),
+      () => TransferItem(taskId: task.taskId, type: type, filename: filename),
     );
-
     item.status = update.status;
     if (update.status.isFinalState && update.exception != null) {
       item.error = update.exception.toString();
@@ -79,19 +80,11 @@ class TransferManager extends ChangeNotifier {
   void _onProgress(TaskProgressUpdate update) {
     final task = update.task;
     final type = task is UploadTask ? 'upload' : 'download';
-    final filename = task.displayName.isNotEmpty
-        ? task.displayName
-        : task.filename;
-
+    final filename = task.displayName.isNotEmpty ? task.displayName : task.filename;
     final item = _items.putIfAbsent(
       task.taskId,
-      () => TransferItem(
-        taskId: task.taskId,
-        type: type,
-        filename: filename,
-      ),
+      () => TransferItem(taskId: task.taskId, type: type, filename: filename),
     );
-
     item.progress = update.progress.clamp(0.0, 1.0);
     notifyListeners();
   }
@@ -104,7 +97,6 @@ class TransferManager extends ChangeNotifier {
     String? mimeType,
   }) async {
     await initialize();
-
     final task = UploadTask.fromFile(
       file: File(path),
       url: '${ApiConfig.baseUrl}/photos/upload',
@@ -115,30 +107,15 @@ class TransferManager extends ChangeNotifier {
       updates: Updates.statusAndProgress,
       retries: 3,
       priority: 0,
-      allowPause: true,
       group: 'media-transfers',
     );
-
-    _items[task.taskId] = TransferItem(
-      taskId: task.taskId,
-      type: 'upload',
-      filename: filename,
-    );
+    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'upload', filename: filename);
     notifyListeners();
-
     return _downloader.enqueue(task);
   }
 
-  Future<bool> enqueueDownload({
-    required Photo photo,
-    required String token,
-  }) async {
+  Future<bool> enqueueDownload({required Photo photo, required String token}) async {
     await initialize();
-
-    final isVideo = photo.mimeType.toLowerCase().startsWith('video/') ||
-        RegExp(r'\.(mp4|mov|m4v|webm|3gp)$', caseSensitive: false)
-            .hasMatch(photo.originalFilename);
-
     final task = DownloadTask(
       url: '${ApiConfig.baseUrl}/photos/${photo.id}',
       headers: {'Authorization': 'Bearer $token'},
@@ -152,58 +129,37 @@ class TransferManager extends ChangeNotifier {
       allowPause: true,
       group: 'media-transfers',
     );
-
-    _items[task.taskId] = TransferItem(
-      taskId: task.taskId,
-      type: 'download',
-      filename: photo.originalFilename,
-    );
+    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'download', filename: photo.originalFilename);
     notifyListeners();
-
-    final enqueued = await _downloader.enqueue(task);
-
-    if (enqueued) {
-      _watchDownloadCompletion(task, isVideo);
-    }
-    return enqueued;
+    return _downloader.enqueue(task);
   }
 
-  Future<void> _watchDownloadCompletion(
-    DownloadTask task,
-    bool isVideo,
-  ) async {
-    while (true) {
-      final record = await _downloader.database.recordForId(task.taskId);
-      if (record == null || !record.status.isFinalState) {
-        await Future<void>.delayed(const Duration(seconds: 1));
-        continue;
-      }
-
-      if (record.status == TaskStatus.complete) {
-        try {
-          await _downloader.moveToSharedStorage(
-            record.task,
-            isVideo ? SharedStorage.video : SharedStorage.images,
-            directory: isVideo ? 'PhotoApp' : 'PhotoApp',
-          );
-        } catch (_) {
-          // The task itself is complete; the transfer UI will still report it.
-        }
-      }
-      break;
+  Future<void> handleDownloadCompletion(TaskStatusUpdate update) async {
+    if (update.status != TaskStatus.complete || update.task is! DownloadTask) return;
+    final task = update.task as DownloadTask;
+    final isVideo = RegExp(r'\.(mp4|mov|m4v|webm|3gp)$', caseSensitive: false).hasMatch(task.filename);
+    try {
+      await _downloader.moveToSharedStorage(
+        task,
+        isVideo ? SharedStorage.video : SharedStorage.images,
+        directory: 'PhotoApp',
+      );
+    } catch (error) {
+      _items[task.taskId]?.error = error.toString();
+      notifyListeners();
     }
   }
 
-  Future<void> cancel(String taskId) async {
-    await _downloader.cancelTaskWithId(taskId);
-  }
+  Future<void> cancel(String taskId) => _downloader.cancelTaskWithId(taskId);
 
   Future<void> pause(String taskId) async {
-    await _downloader.pause(taskId: taskId);
+    final task = await _downloader.taskForId(taskId);
+    if (task is DownloadTask) await _downloader.pause(task);
   }
 
   Future<void> resume(String taskId) async {
-    await _downloader.resume(taskId: taskId);
+    final task = await _downloader.taskForId(taskId);
+    if (task is DownloadTask) await _downloader.resume(task);
   }
 
   void dismissFinished() {
