@@ -47,8 +47,11 @@ class TransferManager extends ChangeNotifier {
 
   Future<void> initialize() async {
     if (_initialized) return;
-    _initialized = true;
-    _downloader.registerCallbacks(group: 'media-transfers', taskStatusCallback: _onStatus, taskProgressCallback: _onProgress);
+    _downloader.registerCallbacks(
+      group: 'media-transfers',
+      taskStatusCallback: _onStatus,
+      taskProgressCallback: _onProgress,
+    );
     _downloader.configureNotificationForGroup(
       'media-transfers',
       running: const TaskNotification('Photo Storage', '{displayName} • {progress}'),
@@ -57,86 +60,105 @@ class TransferManager extends ChangeNotifier {
       paused: const TaskNotification('Photo Storage', '{displayName} paused'),
       progressBar: true,
     );
-    await _downloader.trackTasksInGroup('media-transfers');
-    await _downloader.resumeFromBackground();
+    _initialized = true;
   }
 
   TransferItem _getOrCreate(Task task, String type, String filename, {int? totalBytes}) {
     final existing = _items[task.taskId];
-    if (existing != null) {
-      if (existing.totalBytes == null && totalBytes != null) {
-        // totalBytes is final, so retain the known size only when the item was
-        // created without one by replacing the item while preserving state.
-      }
-      return existing;
-    }
-    final item = TransferItem(taskId: task.taskId, type: type, filename: filename, totalBytes: totalBytes);
+    if (existing != null) return existing;
+    final item = TransferItem(
+      taskId: task.taskId,
+      type: type,
+      filename: filename,
+      totalBytes: totalBytes,
+    );
     _items[task.taskId] = item;
     return item;
   }
 
   void _onStatus(TaskStatusUpdate update) {
     final task = update.task;
-    final type = task is UploadTask ? 'upload' : 'download';
-    final filename = task.displayName.isNotEmpty ? task.displayName : task.filename;
-    final item = _getOrCreate(task, type, filename);
+    final item = _items[task.taskId] ?? _getOrCreate(
+      task,
+      task is UploadTask ? 'upload' : 'download',
+      task.displayName.isNotEmpty ? task.displayName : task.filename,
+    );
     item.status = update.status;
-    if (update.status.isFinalState && update.exception != null) item.error = update.exception.toString();
+    if (update.exception != null) item.error = update.exception.toString();
     notifyListeners();
 
-    if (update.status == TaskStatus.complete) {
-      if (task is DownloadTask) {
-        handleDownloadCompletion(update);
-      } else if (task is UploadTask && item.albumId != null && item.token != null) {
-        _addCompletedUploadToAlbum(item);
-      }
+    if (update.status == TaskStatus.complete && task is DownloadTask) {
+      handleDownloadCompletion(update);
     }
   }
 
   void _onProgress(TaskProgressUpdate update) {
     final task = update.task;
-    final type = task is UploadTask ? 'upload' : 'download';
-    final filename = task.displayName.isNotEmpty ? task.displayName : task.filename;
-    final item = _getOrCreate(task, type, filename, totalBytes: update.expectedFileSize > 0 ? update.expectedFileSize : null);
+    final item = _items[task.taskId] ?? _getOrCreate(
+      task,
+      task is UploadTask ? 'upload' : 'download',
+      task.displayName.isNotEmpty ? task.displayName : task.filename,
+      totalBytes: update.expectedFileSize > 0 ? update.expectedFileSize : null,
+    );
     item.progress = update.progress.clamp(0.0, 1.0);
     notifyListeners();
   }
 
-  Future<void> _addCompletedUploadToAlbum(TransferItem item) async {
-    try {
-      final api = ApiService()..setToken(item.token!);
-      final photos = await api.getRecentPhotos();
-      final uploaded = photos.cast<Photo?>().firstWhere((photo) => photo!.originalFilename == item.filename, orElse: () => null);
-      if (uploaded != null) await api.addPhotoToAlbum(item.albumId!, uploaded.id);
-    } catch (error) {
-      item.error = 'Upload succeeded, but album assignment failed: $error';
-      notifyListeners();
-    }
-  }
-
-  Future<bool> enqueueUpload({required String path, required String filename, required String token, int? albumId, String? mimeType}) async {
+  Future<bool> enqueueUpload({
+    required String path,
+    required String filename,
+    required String token,
+    int? albumId,
+    String? mimeType,
+  }) async {
     await initialize();
-    final fileSize = await File(path).length();
+
+    final file = File(path);
+    if (!await file.exists()) {
+      throw Exception('Selected file no longer exists: $path');
+    }
+
+    final fileSize = await file.length();
+    final fields = <String, String>{};
+    if (albumId != null) fields['album_id'] = albumId.toString();
+
     final task = UploadTask.fromFile(
-      file: File(path),
+      file: file,
       url: '${ApiConfig.baseUrl}/photos/upload',
       headers: {'Authorization': 'Bearer $token'},
-      mimeType: mimeType,
-      fields: albumId == null ? null : {'album_id': albumId.toString()},
+      fields: fields,
+      mimeType: mimeType ?? _mimeTypeFor(filename),
       displayName: filename,
       updates: Updates.statusAndProgress,
       retries: 3,
       priority: 5,
       group: 'media-transfers',
     );
-    final item = TransferItem(taskId: task.taskId, type: 'upload', filename: filename, albumId: albumId, token: token, totalBytes: fileSize);
-    _items[task.taskId] = item;
+
+    _items[task.taskId] = TransferItem(
+      taskId: task.taskId,
+      type: 'upload',
+      filename: filename,
+      albumId: albumId,
+      token: token,
+      totalBytes: fileSize,
+      status: TaskStatus.enqueued,
+    );
     notifyListeners();
-    return _downloader.enqueue(task);
+
+    final queued = await _downloader.enqueue(task);
+    if (!queued) {
+      _items[task.taskId]?.status = TaskStatus.failed;
+      _items[task.taskId]?.error = 'Background downloader rejected the upload task.';
+      notifyListeners();
+      throw Exception('Could not enqueue upload task.');
+    }
+    return true;
   }
 
   Future<bool> enqueueDownload({required Photo photo, required String token}) async {
     await initialize();
+
     final task = DownloadTask(
       url: '${ApiConfig.baseUrl}/photos/${photo.id}',
       headers: {'Authorization': 'Bearer $token'},
@@ -150,9 +172,23 @@ class TransferManager extends ChangeNotifier {
       allowPause: true,
       group: 'media-transfers',
     );
-    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'download', filename: photo.originalFilename, totalBytes: photo.size);
+
+    _items[task.taskId] = TransferItem(
+      taskId: task.taskId,
+      type: 'download',
+      filename: photo.originalFilename,
+      totalBytes: photo.size,
+    );
     notifyListeners();
-    return _downloader.enqueue(task);
+
+    final queued = await _downloader.enqueue(task);
+    if (!queued) {
+      _items[task.taskId]?.status = TaskStatus.failed;
+      _items[task.taskId]?.error = 'Background downloader rejected the download task.';
+      notifyListeners();
+      throw Exception('Could not enqueue download task.');
+    }
+    return true;
   }
 
   Future<void> handleDownloadCompletion(TaskStatusUpdate update) async {
@@ -160,11 +196,28 @@ class TransferManager extends ChangeNotifier {
     if (task is! DownloadTask || update.status != TaskStatus.complete) return;
     final isVideo = RegExp(r'\.(mp4|mov|m4v|webm|3gp)$', caseSensitive: false).hasMatch(task.filename);
     try {
-      await _downloader.moveToSharedStorage(task, isVideo ? SharedStorage.video : SharedStorage.images, directory: 'PhotoApp');
+      await _downloader.moveToSharedStorage(
+        task,
+        isVideo ? SharedStorage.video : SharedStorage.images,
+        directory: 'PhotoApp',
+      );
     } catch (error) {
       _items[task.taskId]?.error = error.toString();
       notifyListeners();
     }
+  }
+
+  String _mimeTypeFor(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    if (lower.endsWith('.m4v')) return 'video/x-m4v';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    if (lower.endsWith('.3gp')) return 'video/3gpp';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    return 'application/octet-stream';
   }
 
   Future<void> cancel(String taskId) => _downloader.cancelTaskWithId(taskId);
