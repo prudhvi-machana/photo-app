@@ -5,16 +5,28 @@ import 'package:flutter/foundation.dart';
 
 import '../models/photo.dart';
 import 'api_config.dart';
+import 'api_service.dart';
 
 class TransferItem {
   final String taskId;
   final String type;
   final String filename;
+  final int? albumId;
+  final String? token;
   double progress;
   TaskStatus status;
   String? error;
 
-  TransferItem({required this.taskId, required this.type, required this.filename, this.progress = 0, this.status = TaskStatus.enqueued, this.error});
+  TransferItem({
+    required this.taskId,
+    required this.type,
+    required this.filename,
+    this.albumId,
+    this.token,
+    this.progress = 0,
+    this.status = TaskStatus.enqueued,
+    this.error,
+  });
 }
 
 class TransferManager extends ChangeNotifier {
@@ -52,7 +64,14 @@ class TransferManager extends ChangeNotifier {
     item.status = update.status;
     if (update.status.isFinalState && update.exception != null) item.error = update.exception.toString();
     notifyListeners();
-    if (update.status == TaskStatus.complete && task is DownloadTask) handleDownloadCompletion(update);
+
+    if (update.status == TaskStatus.complete) {
+      if (task is DownloadTask) {
+        handleDownloadCompletion(update);
+      } else if (task is UploadTask && item.albumId != null && item.token != null) {
+        _addCompletedUploadToAlbum(item);
+      }
+    }
   }
 
   void _onProgress(TaskProgressUpdate update) {
@@ -62,6 +81,23 @@ class TransferManager extends ChangeNotifier {
     final item = _items.putIfAbsent(task.taskId, () => TransferItem(taskId: task.taskId, type: type, filename: filename));
     item.progress = update.progress.clamp(0.0, 1.0);
     notifyListeners();
+  }
+
+  Future<void> _addCompletedUploadToAlbum(TransferItem item) async {
+    try {
+      final api = ApiService()..setToken(item.token!);
+      final photos = await api.getRecentPhotos();
+      final uploaded = photos.cast<Photo?>().firstWhere(
+        (photo) => photo!.originalFilename == item.filename,
+        orElse: () => null,
+      );
+      if (uploaded != null) {
+        await api.addPhotoToAlbum(item.albumId!, uploaded.id);
+      }
+    } catch (error) {
+      item.error = 'Upload succeeded, but album assignment failed: $error';
+      notifyListeners();
+    }
   }
 
   Future<bool> enqueueUpload({required String path, required String filename, required String token, int? albumId, String? mimeType}) async {
@@ -78,7 +114,7 @@ class TransferManager extends ChangeNotifier {
       priority: 5,
       group: 'media-transfers',
     );
-    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'upload', filename: filename);
+    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'upload', filename: filename, albumId: albumId, token: token);
     notifyListeners();
     return _downloader.enqueue(task);
   }
