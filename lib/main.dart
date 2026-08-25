@@ -27,7 +27,7 @@ class PhotoStorageApp extends StatelessWidget {
         return Stack(
           children: [
             child ?? const SizedBox.shrink(),
-            Positioned(top: 0, left: 0, right: 0, child: SafeArea(child: TransferIndicator())),
+            const TransferIndicator(),
           ],
         );
       },
