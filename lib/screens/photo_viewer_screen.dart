@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../models/photo.dart';
@@ -18,7 +17,7 @@ class PhotoViewerScreen extends StatefulWidget {
 }
 
 class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
-  int _currentIndex = 0;
+  late int _currentIndex;
 
   @override
   void initState() {
@@ -38,11 +37,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
 
   Future<void> _downloadCurrent() async {
     try {
-      final queued = await TransferManager.instance.enqueueDownload(photo: _currentPhoto, token: widget.token);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(queued ? 'Download added to background transfers.' : 'Could not start download.')),
-      );
+      await TransferManager.instance.enqueueDownload(photo: _currentPhoto, token: widget.token);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed to start: $error')));
@@ -56,9 +51,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        actions: [
-          IconButton(onPressed: _downloadCurrent, icon: const Icon(Icons.download), tooltip: 'Download'),
-        ],
+        actions: [IconButton(onPressed: _downloadCurrent, icon: const Icon(Icons.download), tooltip: 'Download')],
       ),
       body: PageView.builder(
         controller: PageController(initialPage: widget.initialIndex),
@@ -66,9 +59,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
         onPageChanged: (index) => setState(() => _currentIndex = index),
         itemBuilder: (context, index) {
           final photo = widget.photos[index];
-          return _isVideo(photo)
-              ? _VideoViewer(photo: photo, token: widget.token)
-              : _ImageViewer(photo: photo, token: widget.token);
+          return _isVideo(photo) ? _VideoViewer(photo: photo, token: widget.token) : _ImageViewer(photo: photo, token: widget.token);
         },
       ),
     );
@@ -117,9 +108,17 @@ class _VideoViewerState extends State<_VideoViewer> {
     super.initState();
     _controller = VideoPlayerController.networkUrl(
       Uri.parse('${ApiConfig.baseUrl}/photos/${widget.photo.id}'),
-      httpHeaders: {'Authorization': 'Bearer ${widget.token}', 'Accept': 'video/mp4'},
+      formatHint: VideoFormat.other,
+      httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
+      videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
     );
+    _controller.addListener(_onPlayerChanged);
     _initialize();
+  }
+
+  void _onPlayerChanged() {
+    if (!mounted || !_controller.value.hasError) return;
+    if (_error == null) setState(() => _error = _controller.value.errorDescription ?? 'Unknown player error');
   }
 
   Future<void> _initialize() async {
@@ -135,6 +134,7 @@ class _VideoViewerState extends State<_VideoViewer> {
 
   @override
   void dispose() {
+    _controller.removeListener(_onPlayerChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -143,15 +143,18 @@ class _VideoViewerState extends State<_VideoViewer> {
   Widget build(BuildContext context) {
     if (_error != null) {
       return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, color: Colors.white, size: 60),
-            const SizedBox(height: 12),
-            const Text('Unable to play this video.', style: TextStyle(color: Colors.white)),
-            const SizedBox(height: 8),
-            Text('Player error: $_error', style: const TextStyle(color: Colors.white70, fontSize: 11), textAlign: TextAlign.center),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.white, size: 60),
+              const SizedBox(height: 12),
+              const Text('Unable to play this video.', style: TextStyle(color: Colors.white)),
+              const SizedBox(height: 8),
+              Text('$_error', style: const TextStyle(color: Colors.white70, fontSize: 11), textAlign: TextAlign.center),
+            ],
+          ),
         ),
       );
     }
