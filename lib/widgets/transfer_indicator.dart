@@ -27,50 +27,59 @@ class TransferIndicator extends StatelessWidget {
     }
   }
 
+  String _size(int? bytes) {
+    if (bytes == null) return '';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: TransferManager.instance,
       builder: (context, _) {
         final manager = TransferManager.instance;
-        final items = manager.items;
-        if (items.isEmpty) return const SizedBox.shrink();
         final active = manager.activeItems;
-        final completed = items.where((item) => item.status.isFinalState).length;
+        if (active.isEmpty) return const SizedBox.shrink();
 
-        return Card(
-          margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-          child: Column(
-            children: [
-              ListTile(
-                dense: true,
-                leading: Icon(active.any((item) => item.type == 'upload') ? Icons.cloud_upload_outlined : Icons.cloud_download_outlined),
-                title: Text(active.isEmpty ? '$completed transfer(s) finished' : '${active.length} transfer(s) active'),
-                subtitle: active.isEmpty ? const Text('Transfers are complete.') : Text(active.map((item) => item.filename).join(', ')),
-                trailing: IconButton(icon: const Icon(Icons.open_in_new), tooltip: 'Transfers', onPressed: () => _showTransfers(context)),
-              ),
-              for (final item in active.take(3))
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+        final first = active.first;
+        final percent = (first.progress * 100).round();
+        final suffix = active.length > 1 ? ' +${active.length - 1}' : '';
+
+        return Positioned(
+          right: 16,
+          bottom: 20,
+          child: SafeArea(
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(28),
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(28),
+                onTap: () => _showTransfers(context),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        children: [
-                          Icon(item.type == 'upload' ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
-                          const SizedBox(width: 6),
-                          Expanded(child: Text(item.filename, maxLines: 1, overflow: TextOverflow.ellipsis)),
-                          Text('${(item.progress * 100).round()}%'),
-                        ],
+                      SizedBox(
+                        width: 30,
+                        height: 30,
+                        child: CircularProgressIndicator(value: first.progress, strokeWidth: 3),
                       ),
-                      const SizedBox(height: 4),
-                      LinearProgressIndicator(value: item.progress),
-                      const SizedBox(height: 3),
-                      Text(_status(item.status), style: Theme.of(context).textTheme.bodySmall),
+                      const SizedBox(width: 10),
+                      Icon(first.type == 'upload' ? Icons.cloud_upload_outlined : Icons.cloud_download_outlined, size: 20),
+                      const SizedBox(width: 6),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 150),
+                        child: Text('${first.filename} • $percent%$suffix', maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
                     ],
                   ),
                 ),
-            ],
+              ),
+            ),
           ),
         );
       },
@@ -82,47 +91,75 @@ class TransferIndicator extends StatelessWidget {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      showDragHandle: true,
       builder: (_) => SafeArea(
-        child: ListenableBuilder(
-          listenable: manager,
-          builder: (context, _) {
-            final items = manager.items;
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+        child: SizedBox(
+          height: MediaQuery.sizeOf(context).height * .72,
+          child: ListenableBuilder(
+            listenable: manager,
+            builder: (context, _) {
+              final items = manager.items;
+              return Column(
                 children: [
-                  Row(
-                    children: [
-                      const Expanded(child: Text('Transfers', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
-                      TextButton(onPressed: manager.dismissFinished, child: const Text('Clear finished')),
-                    ],
-                  ),
-                  if (items.isEmpty)
-                    const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No transfers.')))
-                  else
-                    ...items.map(
-                      (item) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(item.type == 'upload' ? Icons.upload : Icons.download),
-                        title: Text(item.filename, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const SizedBox(height: 4),
-                            LinearProgressIndicator(value: item.progress),
-                            const SizedBox(height: 3),
-                            Text('${(item.progress * 100).round()}% • ${_status(item.status)}'),
-                          ],
-                        ),
-                        trailing: item.status.isFinalState ? null : IconButton(icon: const Icon(Icons.close), onPressed: () => manager.cancel(item.taskId)),
-                      ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 12, 8),
+                    child: Row(
+                      children: [
+                        const Expanded(child: Text('Transfers', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold))),
+                        if (items.any((item) => item.status.isFinalState))
+                          TextButton(onPressed: manager.dismissFinished, child: const Text('Clear finished')),
+                      ],
                     ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: items.isEmpty
+                        ? const Center(child: Text('No transfers'))
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: items.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final item = items[index];
+                              final transferred = _size(item.transferredBytes);
+                              final total = _size(item.totalBytes);
+                              final progressText = total.isEmpty ? '${(item.progress * 100).round()}%' : '$transferred / $total';
+                              return Card(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(14),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(item.type == 'upload' ? Icons.arrow_upward : Icons.arrow_downward),
+                                          const SizedBox(width: 10),
+                                          Expanded(child: Text(item.filename, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600))),
+                                          Text('${(item.progress * 100).round()}%'),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      LinearProgressIndicator(value: item.progress),
+                                      const SizedBox(height: 7),
+                                      Row(
+                                        children: [
+                                          Expanded(child: Text('$progressText • ${_status(item.status)}', style: Theme.of(context).textTheme.bodySmall)),
+                                          if (!item.status.isFinalState)
+                                            IconButton(icon: const Icon(Icons.close), tooltip: 'Cancel', onPressed: () => manager.cancel(item.taskId)),
+                                        ],
+                                      ),
+                                      if (item.error != null) Text(item.error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
                 ],
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
