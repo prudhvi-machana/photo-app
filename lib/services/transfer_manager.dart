@@ -26,7 +26,6 @@ class TransferItem {
 
 class TransferManager extends ChangeNotifier {
   TransferManager._();
-
   static final TransferManager instance = TransferManager._();
 
   final FileDownloader _downloader = FileDownloader();
@@ -34,7 +33,6 @@ class TransferManager extends ChangeNotifier {
   bool _initialized = false;
 
   List<TransferItem> get items => List.unmodifiable(_items.values);
-
   List<TransferItem> get activeItems => _items.values
       .where((item) => !item.status.isFinalState)
       .toList(growable: false);
@@ -48,7 +46,6 @@ class TransferManager extends ChangeNotifier {
       taskStatusCallback: _onStatus,
       taskProgressCallback: _onProgress,
     );
-
     _downloader.configureNotificationForGroup(
       'media-transfers',
       running: const TaskNotification('Photo Storage', '{displayName} • {progress}'),
@@ -57,7 +54,6 @@ class TransferManager extends ChangeNotifier {
       paused: const TaskNotification('Photo Storage', '{displayName} paused'),
       progressBar: true,
     );
-
     await _downloader.trackTasksInGroup('media-transfers');
     await _downloader.resumeFromBackground();
   }
@@ -75,6 +71,10 @@ class TransferManager extends ChangeNotifier {
       item.error = update.exception.toString();
     }
     notifyListeners();
+
+    if (update.status == TaskStatus.complete && task is DownloadTask) {
+      handleDownloadCompletion(update);
+    }
   }
 
   void _onProgress(TaskProgressUpdate update) {
@@ -135,8 +135,8 @@ class TransferManager extends ChangeNotifier {
   }
 
   Future<void> handleDownloadCompletion(TaskStatusUpdate update) async {
-    if (update.status != TaskStatus.complete || update.task is! DownloadTask) return;
-    final task = update.task as DownloadTask;
+    final task = update.task;
+    if (task is! DownloadTask || update.status != TaskStatus.complete) return;
     final isVideo = RegExp(r'\.(mp4|mov|m4v|webm|3gp)$', caseSensitive: false).hasMatch(task.filename);
     try {
       await _downloader.moveToSharedStorage(
