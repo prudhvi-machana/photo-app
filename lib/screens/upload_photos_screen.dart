@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../services/api_service.dart';
+import '../services/transfer_manager.dart';
 
 class UploadPhotosScreen extends StatefulWidget {
   final String token;
@@ -21,17 +21,9 @@ class UploadPhotosScreen extends StatefulWidget {
 
 class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   final ImagePicker _picker = ImagePicker();
-  final ApiService _apiService = ApiService();
-
   List<XFile> _selectedPhotos = [];
   XFile? _selectedVideo;
-  bool _isUploading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _apiService.setToken(widget.token);
-  }
+  bool _isStarting = false;
 
   Future<void> _selectPhotos() async {
     try {
@@ -43,9 +35,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
       });
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to select photos.')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to select photos.')));
     }
   }
 
@@ -59,35 +49,31 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
       });
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to select video.')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to select video.')));
     }
   }
 
-  Future<void> _uploadSelectedMedia() async {
-    if ((_selectedPhotos.isEmpty && _selectedVideo == null) || _isUploading) {
-      return;
-    }
-
-    setState(() => _isUploading = true);
+  Future<void> _startTransfers() async {
+    if ((_selectedPhotos.isEmpty && _selectedVideo == null) || _isStarting) return;
+    setState(() => _isStarting = true);
 
     try {
-      int uploadedCount = 0;
-
+      final manager = TransferManager.instance;
       if (_selectedVideo != null) {
-        final uploaded = await _apiService.uploadPhoto(_selectedVideo!);
-        if (widget.albumId != null) {
-          await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
-        }
-        uploadedCount = 1;
+        await manager.enqueueUpload(
+          path: _selectedVideo!.path,
+          filename: _selectedVideo!.name,
+          token: widget.token,
+          albumId: widget.albumId,
+        );
       } else {
         for (final photo in _selectedPhotos) {
-          final uploaded = await _apiService.uploadPhoto(photo);
-          if (widget.albumId != null) {
-            await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
-          }
-          uploadedCount++;
+          await manager.enqueueUpload(
+            path: photo.path,
+            filename: photo.name,
+            token: widget.token,
+            albumId: widget.albumId,
+          );
         }
       }
 
@@ -95,19 +81,17 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            widget.albumId != null
-                ? '$uploadedCount media item(s) added to album.'
-                : '$uploadedCount media item(s) uploaded successfully.',
+            _selectedVideo != null
+                ? 'Video added to background uploads.'
+                : '${_selectedPhotos.length} photo(s) added to background uploads.',
           ),
         ),
       );
       Navigator.of(context).pop(true);
-    } catch (e) {
+    } catch (error) {
       if (!mounted) return;
-      setState(() => _isUploading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Upload failed: $e')),
-      );
+      setState(() => _isStarting = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not start upload: $error')));
     }
   }
 
@@ -122,54 +106,27 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            Expanded(
-              child: hasSelection ? _buildPreview() : _buildEmptyState(),
-            ),
+            Expanded(child: hasSelection ? _buildPreview() : _buildEmptyState()),
             const SizedBox(height: 16),
             if (!hasSelection)
               Row(
                 children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _selectPhotos,
-                      icon: const Icon(Icons.photo_library),
-                      label: const Text('Photos'),
-                    ),
-                  ),
+                  Expanded(child: FilledButton.icon(onPressed: _selectPhotos, icon: const Icon(Icons.photo_library), label: const Text('Photos'))),
                   const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _selectVideo,
-                      icon: const Icon(Icons.videocam),
-                      label: const Text('Video'),
-                    ),
-                  ),
+                  Expanded(child: FilledButton.icon(onPressed: _selectVideo, icon: const Icon(Icons.videocam), label: const Text('Video'))),
                 ],
               )
             else
               Row(
                 children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _isUploading ? null : _selectPhotos,
-                      child: const Text('Change'),
-                    ),
-                  ),
+                  Expanded(child: OutlinedButton(onPressed: _isStarting ? null : _selectPhotos, child: const Text('Change'))),
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
-                      onPressed: _isUploading ? null : _uploadSelectedMedia,
-                      child: _isUploading
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Text(
-                              _selectedVideo != null
-                                  ? 'Upload Video'
-                                  : 'Upload ${_selectedPhotos.length}',
-                            ),
+                      onPressed: _isStarting ? null : _startTransfers,
+                      child: _isStarting
+                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : Text(_selectedVideo != null ? 'Start Upload' : 'Upload ${_selectedPhotos.length}'),
                     ),
                   ),
                 ],
@@ -187,13 +144,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
         children: [
           const Icon(Icons.perm_media_outlined, size: 64),
           const SizedBox(height: 16),
-          Text(
-            widget.albumId != null
-                ? 'Select photos or a video to add'
-                : 'Select photos or a video to upload',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 18),
-          ),
+          Text(widget.albumId != null ? 'Select photos or a video to add' : 'Select photos or a video to upload', textAlign: TextAlign.center, style: const TextStyle(fontSize: 18)),
         ],
       ),
     );
@@ -207,12 +158,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
           children: [
             const Icon(Icons.video_file, size: 96),
             const SizedBox(height: 16),
-            Text(
-              _selectedVideo!.name,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
+            Text(_selectedVideo!.name, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
           ],
         ),
       );
@@ -220,21 +166,12 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
 
     return GridView.builder(
       itemCount: _selectedPhotos.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 4,
-        mainAxisSpacing: 4,
-      ),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 4, mainAxisSpacing: 4),
       itemBuilder: (context, index) {
         final photo = _selectedPhotos[index];
         return ClipRRect(
           borderRadius: BorderRadius.circular(6),
-          child: Image.file(
-            File(photo.path),
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) =>
-                const Center(child: Icon(Icons.image)),
-          ),
+          child: Image.file(File(photo.path), fit: BoxFit.cover, errorBuilder: (context, error, stackTrace) => const Center(child: Icon(Icons.image))),
         );
       },
     );
