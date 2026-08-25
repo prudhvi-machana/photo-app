@@ -9,11 +9,7 @@ class UploadPhotosScreen extends StatefulWidget {
   final String token;
   final int? albumId;
 
-  const UploadPhotosScreen({
-    super.key,
-    required this.token,
-    this.albumId,
-  });
+  const UploadPhotosScreen({super.key, required this.token, this.albumId});
 
   @override
   State<UploadPhotosScreen> createState() => _UploadPhotosScreenState();
@@ -60,33 +56,15 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
     try {
       final manager = TransferManager.instance;
       if (_selectedVideo != null) {
-        await manager.enqueueUpload(
-          path: _selectedVideo!.path,
-          filename: _selectedVideo!.name,
-          token: widget.token,
-          albumId: widget.albumId,
-        );
+        await manager.enqueueUpload(path: _selectedVideo!.path, filename: _selectedVideo!.name, token: widget.token, albumId: widget.albumId);
       } else {
         for (final photo in _selectedPhotos) {
-          await manager.enqueueUpload(
-            path: photo.path,
-            filename: photo.name,
-            token: widget.token,
-            albumId: widget.albumId,
-          );
+          await manager.enqueueUpload(path: photo.path, filename: photo.name, token: widget.token, albumId: widget.albumId);
         }
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _selectedVideo != null
-                ? 'Video added to background uploads.'
-                : '${_selectedPhotos.length} photo(s) added to background uploads.',
-          ),
-        ),
-      );
+      // Transfers are now represented by the persistent floating transfer control.
       Navigator.of(context).pop(true);
     } catch (error) {
       if (!mounted) return;
