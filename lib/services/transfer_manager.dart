@@ -13,6 +13,7 @@ class TransferItem {
   final String filename;
   final int? albumId;
   final String? token;
+  final int? totalBytes;
   double progress;
   TaskStatus status;
   String? error;
@@ -23,10 +24,13 @@ class TransferItem {
     required this.filename,
     this.albumId,
     this.token,
+    this.totalBytes,
     this.progress = 0,
     this.status = TaskStatus.enqueued,
     this.error,
   });
+
+  int? get transferredBytes => totalBytes == null ? null : (totalBytes! * progress).round();
 }
 
 class TransferManager extends ChangeNotifier {
@@ -39,6 +43,7 @@ class TransferManager extends ChangeNotifier {
 
   List<TransferItem> get items => List.unmodifiable(_items.values);
   List<TransferItem> get activeItems => _items.values.where((item) => !item.status.isFinalState).toList(growable: false);
+  int get activeCount => activeItems.length;
 
   Future<void> initialize() async {
     if (_initialized) return;
@@ -60,7 +65,8 @@ class TransferManager extends ChangeNotifier {
     final task = update.task;
     final type = task is UploadTask ? 'upload' : 'download';
     final filename = task.displayName.isNotEmpty ? task.displayName : task.filename;
-    final item = _items.putIfAbsent(task.taskId, () => TransferItem(taskId: task.taskId, type: type, filename: filename));
+    final existing = _items[task.taskId];
+    final item = existing ??= _items[task.taskId] = TransferItem(taskId: task.taskId, type: type, filename: filename);
     item.status = update.status;
     if (update.status.isFinalState && update.exception != null) item.error = update.exception.toString();
     notifyListeners();
@@ -78,7 +84,13 @@ class TransferManager extends ChangeNotifier {
     final task = update.task;
     final type = task is UploadTask ? 'upload' : 'download';
     final filename = task.displayName.isNotEmpty ? task.displayName : task.filename;
-    final item = _items.putIfAbsent(task.taskId, () => TransferItem(taskId: task.taskId, type: type, filename: filename));
+    final existing = _items[task.taskId];
+    final item = existing ??= _items[task.taskId] = TransferItem(
+      taskId: task.taskId,
+      type: type,
+      filename: filename,
+      totalBytes: update.expectedFileSize > 0 ? update.expectedFileSize : null,
+    );
     item.progress = update.progress.clamp(0.0, 1.0);
     notifyListeners();
   }
@@ -87,13 +99,8 @@ class TransferManager extends ChangeNotifier {
     try {
       final api = ApiService()..setToken(item.token!);
       final photos = await api.getRecentPhotos();
-      final uploaded = photos.cast<Photo?>().firstWhere(
-        (photo) => photo!.originalFilename == item.filename,
-        orElse: () => null,
-      );
-      if (uploaded != null) {
-        await api.addPhotoToAlbum(item.albumId!, uploaded.id);
-      }
+      final uploaded = photos.cast<Photo?>().firstWhere((photo) => photo!.originalFilename == item.filename, orElse: () => null);
+      if (uploaded != null) await api.addPhotoToAlbum(item.albumId!, uploaded.id);
     } catch (error) {
       item.error = 'Upload succeeded, but album assignment failed: $error';
       notifyListeners();
@@ -102,6 +109,7 @@ class TransferManager extends ChangeNotifier {
 
   Future<bool> enqueueUpload({required String path, required String filename, required String token, int? albumId, String? mimeType}) async {
     await initialize();
+    final fileSize = await File(path).length();
     final task = UploadTask.fromFile(
       file: File(path),
       url: '${ApiConfig.baseUrl}/photos/upload',
@@ -114,7 +122,7 @@ class TransferManager extends ChangeNotifier {
       priority: 5,
       group: 'media-transfers',
     );
-    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'upload', filename: filename, albumId: albumId, token: token);
+    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'upload', filename: filename, albumId: albumId, token: token, totalBytes: fileSize);
     notifyListeners();
     return _downloader.enqueue(task);
   }
@@ -134,7 +142,7 @@ class TransferManager extends ChangeNotifier {
       allowPause: true,
       group: 'media-transfers',
     );
-    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'download', filename: photo.originalFilename);
+    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'download', filename: photo.originalFilename, totalBytes: photo.size);
     notifyListeners();
     return _downloader.enqueue(task);
   }
