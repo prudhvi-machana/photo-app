@@ -13,25 +13,29 @@ class PhotoThumbnail extends StatelessWidget {
     required this.token,
   });
 
+  bool get _isVideo => photo.mimeType.toLowerCase().startsWith('video/');
+
   @override
   Widget build(BuildContext context) {
-    final thumbnailUrl = photo.thumbnailUrl;
-
-    if (thumbnailUrl == null) {
+    if (_isVideo || photo.thumbnailUrl == null) {
       return Container(
-        color: Colors.grey.shade300,
-        child: const Icon(Icons.image),
+        color: Colors.grey.shade900,
+        child: const Center(
+          child: Icon(
+            Icons.play_circle_fill,
+            color: Colors.white,
+            size: 48,
+          ),
+        ),
       );
     }
 
-    final url = '${ApiConfig.baseUrl}$thumbnailUrl';
+    final url = '${ApiConfig.baseUrl}${photo.thumbnailUrl}';
 
     return Image.network(
       url,
       fit: BoxFit.cover,
-      headers: {
-        'Authorization': 'Bearer $token',
-      },
+      headers: {'Authorization': 'Bearer $token'},
       errorBuilder: (context, error, stackTrace) {
         return Container(
           color: Colors.grey.shade300,
@@ -39,15 +43,8 @@ class PhotoThumbnail extends StatelessWidget {
         );
       },
       loadingBuilder: (context, child, loadingProgress) {
-        if (loadingProgress == null) {
-          return child;
-        }
-
-        return const Center(
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-          ),
-        );
+        if (loadingProgress == null) return child;
+        return const Center(child: CircularProgressIndicator(strokeWidth: 2));
       },
     );
   }
