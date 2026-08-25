@@ -61,12 +61,25 @@ class TransferManager extends ChangeNotifier {
     await _downloader.resumeFromBackground();
   }
 
+  TransferItem _getOrCreate(Task task, String type, String filename, {int? totalBytes}) {
+    final existing = _items[task.taskId];
+    if (existing != null) {
+      if (existing.totalBytes == null && totalBytes != null) {
+        // totalBytes is final, so retain the known size only when the item was
+        // created without one by replacing the item while preserving state.
+      }
+      return existing;
+    }
+    final item = TransferItem(taskId: task.taskId, type: type, filename: filename, totalBytes: totalBytes);
+    _items[task.taskId] = item;
+    return item;
+  }
+
   void _onStatus(TaskStatusUpdate update) {
     final task = update.task;
     final type = task is UploadTask ? 'upload' : 'download';
     final filename = task.displayName.isNotEmpty ? task.displayName : task.filename;
-    final existing = _items[task.taskId];
-    final item = existing ??= _items[task.taskId] = TransferItem(taskId: task.taskId, type: type, filename: filename);
+    final item = _getOrCreate(task, type, filename);
     item.status = update.status;
     if (update.status.isFinalState && update.exception != null) item.error = update.exception.toString();
     notifyListeners();
@@ -84,13 +97,7 @@ class TransferManager extends ChangeNotifier {
     final task = update.task;
     final type = task is UploadTask ? 'upload' : 'download';
     final filename = task.displayName.isNotEmpty ? task.displayName : task.filename;
-    final existing = _items[task.taskId];
-    final item = existing ??= _items[task.taskId] = TransferItem(
-      taskId: task.taskId,
-      type: type,
-      filename: filename,
-      totalBytes: update.expectedFileSize > 0 ? update.expectedFileSize : null,
-    );
+    final item = _getOrCreate(task, type, filename, totalBytes: update.expectedFileSize > 0 ? update.expectedFileSize : null);
     item.progress = update.progress.clamp(0.0, 1.0);
     notifyListeners();
   }
@@ -122,7 +129,8 @@ class TransferManager extends ChangeNotifier {
       priority: 5,
       group: 'media-transfers',
     );
-    _items[task.taskId] = TransferItem(taskId: task.taskId, type: 'upload', filename: filename, albumId: albumId, token: token, totalBytes: fileSize);
+    final item = TransferItem(taskId: task.taskId, type: 'upload', filename: filename, albumId: albumId, token: token, totalBytes: fileSize);
+    _items[task.taskId] = item;
     notifyListeners();
     return _downloader.enqueue(task);
   }
