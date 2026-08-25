@@ -1,3 +1,4 @@
+import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter/material.dart';
 
 import '../services/transfer_manager.dart';
@@ -34,7 +35,6 @@ class TransferIndicator extends StatelessWidget {
         final manager = TransferManager.instance;
         final items = manager.items;
         if (items.isEmpty) return const SizedBox.shrink();
-
         final active = manager.activeItems;
         final completed = items.where((item) => item.status.isFinalState).length;
 
@@ -44,24 +44,10 @@ class TransferIndicator extends StatelessWidget {
             children: [
               ListTile(
                 dense: true,
-                leading: Icon(
-                  active.any((item) => item.type == 'upload')
-                      ? Icons.cloud_upload_outlined
-                      : Icons.cloud_download_outlined,
-                ),
-                title: Text(
-                  active.isEmpty
-                      ? '$completed transfer(s) finished'
-                      : '${active.length} transfer(s) active',
-                ),
-                subtitle: active.isEmpty
-                    ? const Text('Transfers are complete.')
-                    : Text(active.map((item) => item.filename).join(', ')),
-                trailing: IconButton(
-                  icon: const Icon(Icons.open_in_new),
-                  tooltip: 'Transfers',
-                  onPressed: () => _showTransfers(context),
-                ),
+                leading: Icon(active.any((item) => item.type == 'upload') ? Icons.cloud_upload_outlined : Icons.cloud_download_outlined),
+                title: Text(active.isEmpty ? '$completed transfer(s) finished' : '${active.length} transfer(s) active'),
+                subtitle: active.isEmpty ? const Text('Transfers are complete.') : Text(active.map((item) => item.filename).join(', ')),
+                trailing: IconButton(icon: const Icon(Icons.open_in_new), tooltip: 'Transfers', onPressed: () => _showTransfers(context)),
               ),
               for (final item in active.take(3))
                 Padding(
@@ -71,20 +57,9 @@ class TransferIndicator extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          Icon(
-                            item.type == 'upload'
-                                ? Icons.arrow_upward
-                                : Icons.arrow_downward,
-                            size: 16,
-                          ),
+                          Icon(item.type == 'upload' ? Icons.arrow_upward : Icons.arrow_downward, size: 16),
                           const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              item.filename,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
+                          Expanded(child: Text(item.filename, maxLines: 1, overflow: TextOverflow.ellipsis)),
                           Text('${(item.progress * 100).round()}%'),
                         ],
                       ),
@@ -107,7 +82,7 @@ class TransferIndicator extends StatelessWidget {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) => SafeArea(
+      builder: (_) => SafeArea(
         child: ListenableBuilder(
           listenable: manager,
           builder: (context, _) {
@@ -120,20 +95,12 @@ class TransferIndicator extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      const Expanded(
-                        child: Text('Transfers', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                      ),
-                      TextButton(
-                        onPressed: manager.dismissFinished,
-                        child: const Text('Clear finished'),
-                      ),
+                      const Expanded(child: Text('Transfers', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+                      TextButton(onPressed: manager.dismissFinished, child: const Text('Clear finished')),
                     ],
                   ),
                   if (items.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(child: Text('No transfers.')),
-                    )
+                    const Padding(padding: EdgeInsets.all(24), child: Center(child: Text('No transfers.')))
                   else
                     ...items.map(
                       (item) => ListTile(
@@ -149,12 +116,7 @@ class TransferIndicator extends StatelessWidget {
                             Text('${(item.progress * 100).round()}% • ${_status(item.status)}'),
                           ],
                         ),
-                        trailing: item.status.isFinalState
-                            ? null
-                            : IconButton(
-                                icon: const Icon(Icons.close),
-                                onPressed: () => manager.cancel(item.taskId),
-                              ),
+                        trailing: item.status.isFinalState ? null : IconButton(icon: const Icon(Icons.close), onPressed: () => manager.cancel(item.taskId)),
                       ),
                     ),
                 ],
