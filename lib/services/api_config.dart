@@ -12,9 +12,11 @@ class ApiConfig {
 
   /// Temporary direct video URL used only for playback performance testing.
   ///
-  /// Set this to null to use the normal authenticated photo endpoint.
+  /// This points to the seek-optimized test file served by the temporary
+  /// HTTP server on port 8081. Set this to null to use the normal
+  /// authenticated photo endpoint.
   static const String? playbackTestUrl =
-      'http://$serverHost:8081/playback_test.mp4';
+      'http://$serverHost:8081/playback_seek_test.mp4';
 
   /// Base URL used by all API services.
   static const String baseUrl = 'http://$serverHost:$serverPort';
