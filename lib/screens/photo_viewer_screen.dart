@@ -185,7 +185,8 @@ class _VideoViewerState extends State<_VideoViewer> {
   @override
   void initState() {
     super.initState();
-    final url = '${ApiConfig.baseUrl}/photos/${widget.photo.id}';
+    final url = ApiConfig.playbackTestUrl ??
+        '${ApiConfig.baseUrl}/photos/${widget.photo.id}';
     _controller = VideoPlayerController.networkUrl(
       Uri.parse(url),
       httpHeaders: {
