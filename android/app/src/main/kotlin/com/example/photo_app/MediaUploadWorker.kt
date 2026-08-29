@@ -97,6 +97,20 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         }
     }
 
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Media transfers",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Background photo and video uploads"
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+    }
+
     private fun totalItems(): Int = runCatching { JSONArray(inputData.getString(KEY_ITEMS_JSON) ?: "[]").length() }.getOrDefault(0)
 
     @OptIn(UnstableApi::class)
