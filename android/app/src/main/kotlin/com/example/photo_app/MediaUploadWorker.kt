@@ -3,6 +3,7 @@ package com.example.photo_app
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.MediaItem
@@ -34,7 +35,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
         ensureNotificationChannel()
-        return ForegroundInfo(NOTIFICATION_ID, buildNotification("Preparing upload…", 0, totalItems(), true))
+        return createForegroundInfo(buildNotification("Preparing upload…", 0, totalItems(), true))
     }
 
     override suspend fun doWork(): Result {
@@ -45,8 +46,8 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         val items = JSONArray(inputData.getString(KEY_ITEMS_JSON) ?: "[]")
         if (items.length() == 0) return Result.failure()
 
-        setForeground(getForegroundInfo())
         ensureNotificationChannel()
+        setForeground(createForegroundInfo(buildNotification("Preparing upload…", 0, items.length(), true)))
 
         val prefs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val total = items.length()
@@ -63,7 +64,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                 val type = item.optString("type", TYPE_PHOTO)
 
                 if (type == TYPE_VIDEO) {
-                    updateBatchNotification(batchId, "Preparing $filename…")
+                    updateBatchNotification(batchId, "Preparing video ${index + 1} of $total")
                     val playbackPath = transcodeVideo(path)
                     try {
                         updateBatchNotification(batchId, "Uploading ${index + 1} of $total")
@@ -97,13 +98,17 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         }
     }
 
+    private fun createForegroundInfo(notification: android.app.Notification): ForegroundInfo {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
+    }
+
     private fun ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Media transfers",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
+            val channel = NotificationChannel(CHANNEL_ID, "Media transfers", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Background photo and video uploads"
                 setShowBadge(false)
             }
