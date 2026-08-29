@@ -9,9 +9,9 @@ import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.effect.Effects
-import androidx.media3.effect.Presentation
+import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
@@ -97,12 +97,17 @@ class MainActivity : FlutterActivity() {
             val editedBuilder = EditedMediaItem.Builder(mediaItem)
 
             if (width > 1920 || height > 1920) {
-                val effect = if (width >= height) {
-                    Presentation.createForWidth(1920)
-                } else {
-                    Presentation.createForHeight(1920)
-                }
-                editedBuilder.setEffects(Effects(emptyList(), listOf(effect)))
+                val scale = minOf(1920f / width, 1920f / height)
+                val effect = ScaleAndRotateTransformation.Builder()
+                    .setScale(scale, scale)
+                    .build()
+
+                editedBuilder.setEffects(
+                    Effects(
+                        emptyList(),
+                        listOf(effect),
+                    )
+                )
             }
 
             val transformer = Transformer.Builder(this)
