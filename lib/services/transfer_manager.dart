@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -25,9 +24,11 @@ class TransferManager {
     for (var index = 0; index < items.length; index++) {
       final item = items[index];
       final source = File(item.path);
-      if (!await source.exists()) throw Exception('Selected file is no longer available: ${item.filename}');
+      if (!await source.exists()) {
+        throw Exception('Selected file is no longer available: ${item.filename}');
+      }
 
-      final safeName = '${DateTime.now().microsecondsSinceEpoch}_$index_${_safeFilename(item.filename)}';
+      final safeName = '${DateTime.now().microsecondsSinceEpoch}_${index}_${_safeFilename(item.filename)}';
       final destination = File('${stagingDirectory.path}/$safeName');
       await source.copy(destination.path);
 
@@ -45,7 +46,9 @@ class TransferManager {
         'albumId': albumId ?? -1,
         'items': stagedItems,
       });
-      if (batchId == null || batchId.isEmpty) throw Exception('Could not create background upload batch');
+      if (batchId == null || batchId.isEmpty) {
+        throw Exception('Could not create background upload batch');
+      }
       return batchId;
     } catch (_) {
       for (final item in stagedItems) {
