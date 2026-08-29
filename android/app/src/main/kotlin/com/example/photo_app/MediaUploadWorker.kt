@@ -45,7 +45,8 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
 
     override suspend fun doWork(): Result {
         val batchId = inputData.getString(KEY_BATCH_ID) ?: return Result.failure()
-        val token = inputData.getString(KEY_TOKEN) ?: return Result.failure()
+        var accessToken = inputData.getString(KEY_TOKEN) ?: return Result.failure()
+        val refreshToken = inputData.getString(KEY_REFRESH_TOKEN) ?: return Result.failure()
         val baseUrl = inputData.getString(KEY_BASE_URL) ?: return Result.failure()
         val albumId = inputData.getInt(KEY_ALBUM_ID, -1)
         val items = JSONArray(inputData.getString(KEY_ITEMS_JSON) ?: "[]")
@@ -73,19 +74,53 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                     val playbackPath = transcodeVideo(path)
                     try {
                         updateBatchNotification(batchId, "Uploading video ${index + 1} of $total", 0)
-                        val response = uploadVideo(baseUrl, token, path, filename, playbackPath) { percent ->
-                            updateBatchNotification(batchId, "Uploading video ${index + 1} of $total", percent)
+                        val response = try {
+                            uploadVideo(baseUrl, accessToken, path, filename, playbackPath) { percent ->
+                                updateBatchNotification(batchId, "Uploading video ${index + 1} of $total", percent)
+                            }
+                        } catch (_: UnauthorizedException) {
+                            Log.i(TAG, "Access token expired; refreshing before video upload")
+                            accessToken = refreshAccessToken(baseUrl, refreshToken)
+                            uploadVideo(baseUrl, accessToken, path, filename, playbackPath) { percent ->
+                                updateBatchNotification(batchId, "Uploading video ${index + 1} of $total", percent)
+                            }
                         }
-                        linkAlbumIfNeeded(baseUrl, token, albumId, response)
+
+                        if (albumId >= 0) {
+                            try {
+                                linkAlbumIfNeeded(baseUrl, accessToken, albumId, response)
+                            } catch (_: UnauthorizedException) {
+                                Log.i(TAG, "Access token expired; refreshing before album link")
+                                accessToken = refreshAccessToken(baseUrl, refreshToken)
+                                linkAlbumIfNeeded(baseUrl, accessToken, albumId, response)
+                            }
+                        }
                     } finally {
                         File(playbackPath).delete()
                     }
                 } else {
                     updateBatchNotification(batchId, "Uploading photo ${index + 1} of $total", 0)
-                    val response = uploadPhoto(baseUrl, token, path, filename) { percent ->
-                        updateBatchNotification(batchId, "Uploading photo ${index + 1} of $total", percent)
+                    val response = try {
+                        uploadPhoto(baseUrl, accessToken, path, filename) { percent ->
+                            updateBatchNotification(batchId, "Uploading photo ${index + 1} of $total", percent)
+                        }
+                    } catch (_: UnauthorizedException) {
+                        Log.i(TAG, "Access token expired; refreshing before photo upload")
+                        accessToken = refreshAccessToken(baseUrl, refreshToken)
+                        uploadPhoto(baseUrl, accessToken, path, filename) { percent ->
+                            updateBatchNotification(batchId, "Uploading photo ${index + 1} of $total", percent)
+                        }
                     }
-                    linkAlbumIfNeeded(baseUrl, token, albumId, response)
+
+                    if (albumId >= 0) {
+                        try {
+                            linkAlbumIfNeeded(baseUrl, accessToken, albumId, response)
+                        } catch (_: UnauthorizedException) {
+                            Log.i(TAG, "Access token expired; refreshing before album link")
+                            accessToken = refreshAccessToken(baseUrl, refreshToken)
+                            linkAlbumIfNeeded(baseUrl, accessToken, albumId, response)
+                        }
+                    }
                 }
 
                 prefs.edit()
@@ -124,6 +159,38 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             Result.failure()
         }
     }
+
+    private suspend fun refreshAccessToken(baseUrl: String, refreshToken: String): String = withContext(Dispatchers.IO) {
+        val connection = (URL("$baseUrl/auth/refresh").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            connectTimeout = 30_000
+            readTimeout = 30_000
+            setRequestProperty("Content-Type", "application/json")
+        }
+        try {
+            connection.outputStream.use { output ->
+                output.write(JSONObject().put("refresh_token", refreshToken).toString().toByteArray(Charsets.UTF_8))
+            }
+            val responseCode = connection.responseCode
+            val response = if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().readText()
+            } else {
+                connection.errorStream?.bufferedReader()?.readText().orEmpty()
+            }
+            if (responseCode !in 200..299) {
+                throw Exception("Token refresh failed ($responseCode): $response")
+            }
+            val token = JSONObject(response).optString("access_token")
+            if (token.isBlank()) throw Exception("Token refresh returned no access token")
+            Log.i(TAG, "Access token refreshed successfully")
+            token
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private class UnauthorizedException(message: String) : Exception(message)
 
     private fun createForegroundInfo(notification: android.app.Notification): ForegroundInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -212,10 +279,9 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         multipartPost("$baseUrl/photos/upload-video", token, listOf(Triple("original_file", File(originalPath), originalFilename), Triple("playback_file", File(playbackPath), "playback.mp4")), onProgress)
     }
 
-    private suspend fun linkAlbumIfNeeded(baseUrl: String, token: String, albumId: Int, response: String) = withContext(Dispatchers.IO) {
-        if (albumId < 0) return@withContext
+    private fun linkAlbumIfNeeded(baseUrl: String, token: String, albumId: Int, response: String) {
         val photoId = JSONObject(response).optInt("id", -1)
-        if (photoId < 0) return@withContext
+        if (photoId < 0) return
         val connection = (URL("$baseUrl/albums/$albumId/photos/$photoId").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 30_000
@@ -223,7 +289,11 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             setRequestProperty("Authorization", "Bearer $token")
         }
         try {
-            if (connection.responseCode !in 200..299) throw Exception("Album link failed: ${connection.responseCode}")
+            val code = connection.responseCode
+            if (code == HttpURLConnection.HTTP_UNAUTHORIZED) {
+                throw UnauthorizedException("Album link unauthorized")
+            }
+            if (code !in 200..299) throw Exception("Album link failed: $code")
         } finally {
             connection.disconnect()
         }
@@ -270,6 +340,9 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             onProgress(100)
             val responseCode = connection.responseCode
             val response = if (responseCode in 200..299) connection.inputStream.bufferedReader().readText() else connection.errorStream?.bufferedReader()?.readText().orEmpty()
+            if (responseCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
+                throw UnauthorizedException("Upload unauthorized: $response")
+            }
             if (responseCode !in 200..299) throw Exception("Upload failed ($responseCode): $response")
             return response
         } finally {
@@ -306,6 +379,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         private const val TAG = "PhotoAppTransfer"
         const val KEY_BATCH_ID = "batchId"
         const val KEY_TOKEN = "token"
+        const val KEY_REFRESH_TOKEN = "refreshToken"
         const val KEY_BASE_URL = "baseUrl"
         const val KEY_ALBUM_ID = "albumId"
         const val KEY_ITEMS_JSON = "itemsJson"
