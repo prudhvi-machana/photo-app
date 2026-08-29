@@ -4,8 +4,11 @@ import 'screens/albums_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_service.dart';
 import 'services/auth_service.dart';
+import 'services/transfer_manager.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await TransferManager.initialize();
   runApp(const PhotoStorageApp());
 }
 
@@ -65,8 +68,6 @@ class _StartupScreenState extends State<StartupScreen> {
         ),
       );
     } catch (_) {
-      // The stored token is no longer valid. Remove it so the next launch
-      // does not repeatedly try the same invalid session.
       await _authService.logout();
       _showLogin();
     }
