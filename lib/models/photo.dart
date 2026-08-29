@@ -6,6 +6,8 @@ class Photo {
   final int size;
   final String uploadedAt;
   final String? thumbnailUrl;
+  final String? playbackUrl;
+  final String? playbackStatus;
 
   Photo({
     required this.id,
@@ -15,9 +17,12 @@ class Photo {
     required this.size,
     required this.uploadedAt,
     this.thumbnailUrl,
+    this.playbackUrl,
+    this.playbackStatus,
   });
 
   factory Photo.fromJson(Map<String, dynamic> json) {
+    final playback = json['playback'];
     return Photo(
       id: json['id'],
       filename: json['filename'] ?? '',
@@ -26,6 +31,8 @@ class Photo {
       size: json['size'] ?? 0,
       uploadedAt: json['uploaded_at'] ?? '',
       thumbnailUrl: json['thumbnail_url'] ?? '/photos/${json['id']}/thumbnail',
+      playbackUrl: playback is Map<String, dynamic> ? playback['url'] as String? : null,
+      playbackStatus: playback is Map<String, dynamic> ? playback['status'] as String? : null,
     );
   }
 }
