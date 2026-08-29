@@ -22,6 +22,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -83,7 +84,11 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                     linkAlbumIfNeeded(baseUrl, token, albumId, response)
                 }
 
-                prefs.edit().putBoolean("${batchId}_item_$index", true).putInt("${batchId}_completed", index + 1).apply()
+                prefs.edit()
+                    .putBoolean("${batchId}_item_$index", true)
+                    .putInt("${batchId}_completed", index + 1)
+                    .remove("${batchId}_retry")
+                    .apply()
                 File(path).delete()
                 updateBatchNotification(batchId, if (index + 1 == total) "Upload complete" else "Uploading ${index + 1} of $total")
             }
@@ -95,18 +100,28 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             Log.e(TAG, "Media transfer failed (attempt ${runAttemptCount + 1})", error)
             val completed = prefs.getInt("${batchId}_completed", 0)
             val message = error.message?.replace('\n', ' ')?.take(90) ?: error.javaClass.simpleName
+
             if (error is ExportException || error is IllegalArgumentException || error.message?.contains("Video file not found", true) == true || error.message?.contains("video dimensions", true) == true) {
                 notificationManager.notify(NOTIFICATION_ID, buildNotification("Video preparation failed", completed, total, false, message))
                 cleanupBatchState(batchId, total)
                 return Result.failure()
             }
-            if (runAttemptCount < 2) {
-                notificationManager.notify(NOTIFICATION_ID, buildNotification("Retrying upload…", completed, total, false, message))
-                Result.retry()
-            } else {
-                notificationManager.notify(NOTIFICATION_ID, buildNotification("Upload finished with errors", completed, total, false, message))
-                Result.failure()
+
+            // Keep transient network failures inside this already-running
+            // foreground worker. Returning Result.retry() would make
+            // WorkManager start a new foreground service from the background,
+            // which Android 12+ can reject with ForegroundServiceStartNotAllowedException.
+            val retryCount = prefs.getInt("${batchId}_retry", 0)
+            if (retryCount < MAX_INTERNAL_RETRIES) {
+                prefs.edit().putInt("${batchId}_retry", retryCount + 1).apply()
+                updateBatchNotification(batchId, "Retrying upload…")
+                delay(RETRY_DELAY_MS)
+                return doWork()
             }
+
+            notificationManager.notify(NOTIFICATION_ID, buildNotification("Upload finished with errors", completed, total, false, message))
+            cleanupBatchState(batchId, total)
+            Result.failure()
         }
     }
 
@@ -180,9 +195,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
 
             mainHandler.post(startRunnable)
             continuation.invokeOnCancellation {
-                mainHandler.post {
-                    transformerHolder[0]?.cancel()
-                }
+                mainHandler.post { transformerHolder[0]?.cancel() }
             }
         } catch (error: Throwable) {
             Log.e(TAG, "Could not prepare video", error)
@@ -278,7 +291,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         val prefs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val editor = prefs.edit()
         for (index in 0 until total) editor.remove("${batchId}_item_$index")
-        editor.remove("${batchId}_total").remove("${batchId}_completed").remove("${batchId}_failed").apply()
+        editor.remove("${batchId}_total").remove("${batchId}_completed").remove("${batchId}_failed").remove("${batchId}_retry").apply()
     }
 
     companion object {
@@ -293,5 +306,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         const val NOTIFICATION_ID = 4101
         const val CHANNEL_ID = "media_transfer"
         const val PREFS = "media_transfer_state"
+        private const val MAX_INTERNAL_RETRIES = 3
+        private const val RETRY_DELAY_MS = 5_000L
     }
 }
