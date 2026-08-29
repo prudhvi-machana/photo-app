@@ -4,8 +4,12 @@
 /// Keeping the host here means the rest of the app never needs to know
 /// the server's IP address.
 class ApiConfig {
-  /// Current home-server hostname on the local network.
-  static const String serverHost = 'homelab.local';
+  /// IPv4 address of the home server on the local network.
+  ///
+  /// We intentionally use IPv4 here because Android may resolve
+  /// homelab.local to an IPv6 link-local address, which is unreliable for
+  /// long-running background uploads.
+  static const String serverHost = '10.14.16.253';
 
   /// FastAPI HTTP port.
   static const int serverPort = 8000;
