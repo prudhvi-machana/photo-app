@@ -24,9 +24,8 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   final ImagePicker _picker = ImagePicker();
   final ApiService _apiService = ApiService();
 
-  List<XFile> _selectedPhotos = [];
-  XFile? _selectedVideo;
-  bool _isUploading = false;
+  List<XFile> _selectedMedia = [];
+  bool _isPreparing = false;
 
   @override
   void initState() {
@@ -34,99 +33,90 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
     _apiService.setToken(widget.token);
   }
 
-  Future<void> _selectPhotos() async {
-    try {
-      final photos = await _picker.pickMultiImage(imageQuality: 100);
-      if (!mounted) return;
-      setState(() {
-        _selectedPhotos = photos;
-        _selectedVideo = null;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to select photos.')),
-      );
-    }
+  bool _isVideo(XFile file) {
+    final mimeType = file.mimeType?.toLowerCase();
+    if (mimeType != null && mimeType.startsWith('video/')) return true;
+
+    final extension = file.name.split('.').last.toLowerCase();
+    return {
+      'mp4',
+      'mov',
+      'm4v',
+      'avi',
+      'mkv',
+      'webm',
+      '3gp',
+      '3gpp',
+      'ts',
+    }.contains(extension);
   }
 
-  Future<void> _selectVideo() async {
+  Future<void> _selectMedia() async {
     try {
-      final video = await _picker.pickVideo(source: ImageSource.gallery);
-      if (!mounted || video == null) return;
-      setState(() {
-        _selectedVideo = video;
-        _selectedPhotos = [];
-      });
+      final media = await _picker.pickMultipleMedia();
+      if (!mounted) return;
+      setState(() => _selectedMedia = media);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to select video.')),
+        const SnackBar(content: Text('Failed to select media.')),
       );
     }
   }
 
   Future<void> _uploadSelectedMedia() async {
-    if ((_selectedPhotos.isEmpty && _selectedVideo == null) || _isUploading) return;
+    if (_selectedMedia.isEmpty || _isPreparing) return;
 
-    if (_selectedVideo != null) {
-      await _uploadVideo();
-      return;
-    }
-
-    setState(() => _isUploading = true);
+    setState(() => _isPreparing = true);
 
     try {
       var queuedCount = 0;
-      for (final photo in _selectedPhotos) {
-        final queued = await TransferManager.enqueuePhotoUpload(
-          filePath: photo.path,
-          filename: photo.name,
-          token: widget.token,
-          albumId: widget.albumId,
-        );
-        if (queued) queuedCount++;
+      var videoCount = 0;
+
+      for (final media in _selectedMedia) {
+        if (_isVideo(media)) {
+          videoCount++;
+          if (mounted) {
+            setState(() {});
+          }
+
+          // Transcoding happens on the phone. Once prepared, the actual
+          // original + playback upload runs in Android background transfer.
+          final playbackPath = await _apiService.createVideoPlayback(media);
+          final queued = await TransferManager.enqueueVideoUpload(
+            originalPath: media.path,
+            originalFilename: media.name,
+            playbackPath: playbackPath,
+            token: widget.token,
+            albumId: widget.albumId,
+          );
+          if (queued) queuedCount++;
+        } else {
+          final queued = await TransferManager.enqueuePhotoUpload(
+            filePath: media.path,
+            filename: media.name,
+            token: widget.token,
+            albumId: widget.albumId,
+          );
+          if (queued) queuedCount++;
+        }
       }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            widget.albumId != null
-                ? '$queuedCount photo(s) queued for background upload.'
-                : '$queuedCount photo(s) queued for upload.',
+            '$queuedCount of ${_selectedMedia.length} media queued for background upload'
+            '${videoCount > 0 ? ' ($videoCount video${videoCount == 1 ? '' : 's'} prepared on phone)' : ''}.',
           ),
         ),
       );
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _isUploading = false);
+      setState(() => _isPreparing = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not start upload: $e')),
-      );
-    }
-  }
-
-  Future<void> _uploadVideo() async {
-    setState(() => _isUploading = true);
-
-    try {
-      final uploaded = await _apiService.uploadVideoWithPlayback(_selectedVideo!);
-      if (widget.albumId != null) {
-        await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
-      }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Video uploaded successfully.')),
-      );
-      Navigator.of(context).pop(true);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isUploading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Video upload failed: $e')),
       );
     }
   }
@@ -134,7 +124,9 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   @override
   Widget build(BuildContext context) {
     final title = widget.albumId != null ? 'Add Media' : 'Upload Media';
-    final hasSelection = _selectedPhotos.isNotEmpty || _selectedVideo != null;
+    final hasSelection = _selectedMedia.isNotEmpty;
+    final videoCount = _selectedMedia.where(_isVideo).length;
+    final photoCount = _selectedMedia.length - videoCount;
 
     return Scaffold(
       appBar: AppBar(title: Text(title)),
@@ -142,52 +134,51 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            Expanded(child: hasSelection ? _buildPreview() : _buildEmptyState()),
+            Expanded(
+              child: hasSelection ? _buildPreview() : _buildEmptyState(),
+            ),
             const SizedBox(height: 16),
             if (!hasSelection)
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _selectPhotos,
-                      icon: const Icon(Icons.photo_library),
-                      label: const Text('Photos'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _selectVideo,
-                      icon: const Icon(Icons.videocam),
-                      label: const Text('Video'),
-                    ),
-                  ),
-                ],
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _selectMedia,
+                  icon: const Icon(Icons.photo_library),
+                  label: const Text('Select Photos & Videos'),
+                ),
               )
             else
               Row(
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _isUploading ? null : _selectPhotos,
+                      onPressed: _isPreparing ? null : _selectMedia,
                       child: const Text('Change'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
-                      onPressed: _isUploading ? null : _uploadSelectedMedia,
-                      child: _isUploading
+                      onPressed: _isPreparing ? null : _uploadSelectedMedia,
+                      child: _isPreparing
                           ? const SizedBox(
                               height: 20,
                               width: 20,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : Text(_selectedVideo != null ? 'Upload Video' : 'Upload ${_selectedPhotos.length}'),
+                          : Text('Upload ${_selectedMedia.length}'),
                     ),
                   ),
                 ],
               ),
+            if (hasSelection) ...[
+              const SizedBox(height: 10),
+              Text(
+                '$photoCount photo${photoCount == 1 ? '' : 's'} • '
+                '$videoCount video${videoCount == 1 ? '' : 's'}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ],
         ),
       ),
@@ -203,8 +194,8 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
           const SizedBox(height: 16),
           Text(
             widget.albumId != null
-                ? 'Select photos or a video to add'
-                : 'Select photos or a video to upload',
+                ? 'Select photos and videos to add'
+                : 'Select photos and videos to upload',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 18),
           ),
@@ -214,39 +205,34 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   }
 
   Widget _buildPreview() {
-    if (_selectedVideo != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.video_file, size: 96),
-            const SizedBox(height: 16),
-            Text(
-              _selectedVideo!.name,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      );
-    }
-
     return GridView.builder(
-      itemCount: _selectedPhotos.length,
+      itemCount: _selectedMedia.length,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         crossAxisSpacing: 4,
         mainAxisSpacing: 4,
       ),
       itemBuilder: (context, index) {
-        final photo = _selectedPhotos[index];
+        final media = _selectedMedia[index];
+        if (_isVideo(media)) {
+          return Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: const Center(
+              child: Icon(Icons.videocam, size: 40),
+            ),
+          );
+        }
+
         return ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: Image.file(
-            File(photo.path),
+            File(media.path),
             fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => const Center(child: Icon(Icons.image)),
+            errorBuilder: (context, error, stackTrace) =>
+                const Center(child: Icon(Icons.image)),
           ),
         );
       },
