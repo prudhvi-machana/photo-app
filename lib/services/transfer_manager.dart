@@ -13,6 +13,7 @@ class TransferManager {
   static Future<String> enqueueMediaBatch({
     required List<MediaTransferItem> items,
     required String token,
+    required String refreshToken,
     int? albumId,
   }) async {
     if (items.isEmpty) throw Exception('No media selected');
@@ -42,6 +43,7 @@ class TransferManager {
     try {
       final batchId = await _channel.invokeMethod<String>('enqueueMediaBatch', {
         'token': token,
+        'refreshToken': refreshToken,
         'baseUrl': ApiConfig.baseUrl,
         'albumId': albumId ?? -1,
         'items': stagedItems,
