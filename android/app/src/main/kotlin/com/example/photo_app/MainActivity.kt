@@ -47,6 +47,7 @@ class MainActivity : FlutterActivity() {
                 }
                 try {
                     val token = call.argument<String>("token") ?: throw IllegalArgumentException("Missing token")
+                    val refreshToken = call.argument<String>("refreshToken") ?: throw IllegalArgumentException("Missing refresh token")
                     val baseUrl = call.argument<String>("baseUrl") ?: throw IllegalArgumentException("Missing base URL")
                     val albumId = call.argument<Int>("albumId") ?: -1
                     val items = call.argument<List<Map<String, Any?>>>("items") ?: emptyList()
@@ -56,6 +57,7 @@ class MainActivity : FlutterActivity() {
                     val data = Data.Builder()
                         .putString(MediaUploadWorker.KEY_BATCH_ID, batchId)
                         .putString(MediaUploadWorker.KEY_TOKEN, token)
+                        .putString(MediaUploadWorker.KEY_REFRESH_TOKEN, refreshToken)
                         .putString(MediaUploadWorker.KEY_BASE_URL, baseUrl)
                         .putInt(MediaUploadWorker.KEY_ALBUM_ID, albumId)
                         .putString(MediaUploadWorker.KEY_ITEMS_JSON, itemsToJson(items))
