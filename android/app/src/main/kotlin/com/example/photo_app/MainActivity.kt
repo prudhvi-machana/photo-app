@@ -1,20 +1,8 @@
 package com.example.photo_app
 
 import android.content.ContentValues
-import android.media.MediaMetadataRetriever
-import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import androidx.annotation.OptIn
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.effect.ScaleAndRotateTransformation
-import androidx.media3.transformer.EditedMediaItem
-import androidx.media3.transformer.Effects
-import androidx.media3.transformer.ExportException
-import androidx.media3.transformer.ExportResult
-import androidx.media3.transformer.Transformer
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -26,7 +14,6 @@ import java.util.UUID
 
 class MainActivity : FlutterActivity() {
     private val mediaStoreChannel = "photo_app/media_store"
-    private val videoChannel = "photo_app/video_transcoder"
     private val transferChannel = "photo_app/background_transfer"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -66,6 +53,19 @@ class MainActivity : FlutterActivity() {
                     require(items.isNotEmpty()) { "No media selected" }
 
                     val batchId = UUID.randomUUID().toString()
+                    val data = Data.Builder()
+                        .putString(MediaUploadWorker.KEY_BATCH_ID, batchId)
+                        .putString(MediaUploadWorker.KEY_TOKEN, token)
+                        .putString(MediaUploadWorker.KEY_BASE_URL, baseUrl)
+                        .putInt(MediaUploadWorker.KEY_ALBUM_ID, albumId)
+                        .putString(MediaUploadWorker.KEY_ITEMS_JSON, itemsToJson(items))
+                        .build()
+
+                    val request = OneTimeWorkRequestBuilder<MediaUploadWorker>()
+                        .setInputData(data)
+                        .addTag(batchId)
+                        .build()
+
                     val prefs = getSharedPreferences(MediaUploadWorker.PREFS, MODE_PRIVATE)
                     prefs.edit()
                         .putInt("${batchId}_total", items.size)
@@ -73,89 +73,24 @@ class MainActivity : FlutterActivity() {
                         .putInt("${batchId}_failed", 0)
                         .apply()
 
-                    val workManager = WorkManager.getInstance(applicationContext)
-                    for (item in items) {
-                        val path = item["path"] as? String ?: throw IllegalArgumentException("Missing media path")
-                        val filename = item["filename"] as? String ?: File(path).name
-                        val type = item["type"] as? String ?: MediaUploadWorker.TYPE_PHOTO
-                        val data = Data.Builder()
-                            .putString(MediaUploadWorker.KEY_BATCH_ID, batchId)
-                            .putString(MediaUploadWorker.KEY_TYPE, type)
-                            .putString(MediaUploadWorker.KEY_TOKEN, token)
-                            .putString(MediaUploadWorker.KEY_BASE_URL, baseUrl)
-                            .putInt(MediaUploadWorker.KEY_ALBUM_ID, albumId)
-                            .putString(MediaUploadWorker.KEY_ORIGINAL_PATH, path)
-                            .putString(MediaUploadWorker.KEY_ORIGINAL_FILENAME, filename)
-                            .build()
-
-                        val request = OneTimeWorkRequestBuilder<MediaUploadWorker>()
-                            .setInputData(data)
-                            .addTag(batchId)
-                            .build()
-                        workManager.enqueue(request)
-                    }
+                    WorkManager.getInstance(applicationContext).enqueue(request)
                     result.success(batchId)
                 } catch (e: Exception) {
                     result.error("QUEUE_FAILED", e.message, null)
                 }
             }
-
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, videoChannel)
-            .setMethodCallHandler { call, result ->
-                if (call.method != "createPlaybackVideo") {
-                    result.notImplemented()
-                    return@setMethodCallHandler
-                }
-                val inputPath = call.argument<String>("inputPath")
-                if (inputPath == null) {
-                    result.error("INVALID_ARGUMENT", "Missing input video path", null)
-                    return@setMethodCallHandler
-                }
-                try {
-                    createPlaybackVideo(inputPath, result)
-                } catch (e: Exception) {
-                    result.error("TRANSCODE_FAILED", e.message, null)
-                }
-            }
     }
 
-    @OptIn(UnstableApi::class)
-    private fun createPlaybackVideo(inputPath: String, result: MethodChannel.Result) {
-        val inputFile = File(inputPath)
-        require(inputFile.exists()) { "Input video does not exist" }
-        val outputFile = File(cacheDir, "playback-${System.currentTimeMillis()}.mp4")
-        if (outputFile.exists()) outputFile.delete()
-        val retriever = MediaMetadataRetriever()
-        try {
-            retriever.setDataSource(inputPath)
-            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-            val editedBuilder = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(inputFile)))
-            if (width > 1920 || height > 1920) {
-                val scale = minOf(1920f / width, 1920f / height)
-                editedBuilder.setEffects(Effects(emptyList(), listOf(ScaleAndRotateTransformation.Builder().setScale(scale, scale).build())))
-            }
-            val transformer = Transformer.Builder(this)
-                .setVideoMimeType(MimeTypes.VIDEO_H264)
-                .setAudioMimeType(MimeTypes.AUDIO_AAC)
-                .setPortraitEncodingEnabled(true)
-                .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: androidx.media3.transformer.Composition, exportResult: ExportResult) {
-                        if (!outputFile.isFile || outputFile.length() == 0L) {
-                            result.error("TRANSCODE_FAILED", "Playback output is empty", null)
-                            return
-                        }
-                        result.success(outputFile.absolutePath)
-                    }
-                    override fun onError(composition: androidx.media3.transformer.Composition, exportResult: ExportResult, exportException: ExportException) {
-                        if (outputFile.exists()) outputFile.delete()
-                        result.error("TRANSCODE_FAILED", exportException.message, null)
-                    }
-                }).build()
-            transformer.start(editedBuilder.build(), outputFile.absolutePath)
-        } finally {
-            retriever.release()
+    private fun itemsToJson(items: List<Map<String, Any?>>): String {
+        val array = org.json.JSONArray()
+        for (item in items) {
+            val objectJson = org.json.JSONObject()
+            objectJson.put("path", item["path"] as? String ?: "")
+            objectJson.put("filename", item["filename"] as? String ?: "media")
+            objectJson.put("type", item["type"] as? String ?: MediaUploadWorker.TYPE_PHOTO)
+            array.put(objectJson)
         }
+        return array.toString()
     }
 
     private fun saveToMediaStore(file: File, name: String, mimeType: String): String {
