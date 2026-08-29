@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/api_service.dart';
+import '../services/transfer_manager.dart';
 
 class UploadPhotosScreen extends StatefulWidget {
   final String token;
@@ -68,25 +69,23 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   Future<void> _uploadSelectedMedia() async {
     if ((_selectedPhotos.isEmpty && _selectedVideo == null) || _isUploading) return;
 
+    if (_selectedVideo != null) {
+      await _uploadVideo();
+      return;
+    }
+
     setState(() => _isUploading = true);
 
     try {
-      int uploadedCount = 0;
-
-      if (_selectedVideo != null) {
-        final uploaded = await _apiService.uploadVideoWithPlayback(_selectedVideo!);
-        if (widget.albumId != null) {
-          await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
-        }
-        uploadedCount = 1;
-      } else {
-        for (final photo in _selectedPhotos) {
-          final uploaded = await _apiService.uploadPhoto(photo);
-          if (widget.albumId != null) {
-            await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
-          }
-          uploadedCount++;
-        }
+      var queuedCount = 0;
+      for (final photo in _selectedPhotos) {
+        final queued = await TransferManager.enqueuePhotoUpload(
+          filePath: photo.path,
+          filename: photo.name,
+          token: widget.token,
+          albumId: widget.albumId,
+        );
+        if (queued) queuedCount++;
       }
 
       if (!mounted) return;
@@ -94,8 +93,8 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
         SnackBar(
           content: Text(
             widget.albumId != null
-                ? '$uploadedCount media item(s) added to album.'
-                : '$uploadedCount media item(s) uploaded successfully.',
+                ? '$queuedCount photo(s) queued for background upload.'
+                : '$queuedCount photo(s) queued for upload.',
           ),
         ),
       );
@@ -104,7 +103,30 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
       if (!mounted) return;
       setState(() => _isUploading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Upload failed: $e')),
+        SnackBar(content: Text('Could not start upload: $e')),
+      );
+    }
+  }
+
+  Future<void> _uploadVideo() async {
+    setState(() => _isUploading = true);
+
+    try {
+      final uploaded = await _apiService.uploadVideoWithPlayback(_selectedVideo!);
+      if (widget.albumId != null) {
+        await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video uploaded successfully.')),
+      );
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isUploading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Video upload failed: $e')),
       );
     }
   }
