@@ -40,7 +40,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
         ensureNotificationChannel()
-        return createForegroundInfo(buildNotification("Preparing upload…", 0, totalItems(), true))
+        return createForegroundInfo(buildNotification("Preparing upload…", 0, totalItems(), true, 0))
     }
 
     override suspend fun doWork(): Result {
@@ -52,7 +52,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         if (items.length() == 0) return Result.failure()
 
         ensureNotificationChannel()
-        setForeground(createForegroundInfo(buildNotification("Preparing upload…", 0, items.length(), true)))
+        setForeground(createForegroundInfo(buildNotification("Preparing upload…", 0, items.length(), true, 0)))
 
         val prefs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val total = items.length()
@@ -69,18 +69,22 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                 val type = item.optString("type", TYPE_PHOTO)
 
                 if (type == TYPE_VIDEO) {
-                    updateBatchNotification(batchId, "Preparing video ${index + 1} of $total")
+                    updateBatchNotification(batchId, "Preparing video ${index + 1} of $total", 0)
                     val playbackPath = transcodeVideo(path)
                     try {
-                        updateBatchNotification(batchId, "Uploading ${index + 1} of $total")
-                        val response = uploadVideo(baseUrl, token, path, filename, playbackPath)
+                        updateBatchNotification(batchId, "Uploading video ${index + 1} of $total", 0)
+                        val response = uploadVideo(baseUrl, token, path, filename, playbackPath) { percent ->
+                            updateBatchNotification(batchId, "Uploading video ${index + 1} of $total", percent)
+                        }
                         linkAlbumIfNeeded(baseUrl, token, albumId, response)
                     } finally {
                         File(playbackPath).delete()
                     }
                 } else {
-                    updateBatchNotification(batchId, "Uploading ${index + 1} of $total")
-                    val response = uploadPhoto(baseUrl, token, path, filename)
+                    updateBatchNotification(batchId, "Uploading photo ${index + 1} of $total", 0)
+                    val response = uploadPhoto(baseUrl, token, path, filename) { percent ->
+                        updateBatchNotification(batchId, "Uploading photo ${index + 1} of $total", percent)
+                    }
                     linkAlbumIfNeeded(baseUrl, token, albumId, response)
                 }
 
@@ -90,13 +94,10 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                     .remove("${batchId}_retry")
                     .apply()
                 File(path).delete()
-                updateBatchNotification(batchId, if (index + 1 == total) "Upload complete" else "Uploading ${index + 1} of $total")
+                updateBatchNotification(batchId, if (index + 1 == total) "Upload complete" else "Uploading ${index + 1} of $total", if (index + 1 == total) 100 else 0)
             }
 
-            // WorkManager removes the foreground notification when the worker
-            // finishes. Use a separate notification ID for the final result
-            // so it survives after the foreground service stops.
-            notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Upload complete", total, total, false))
+            notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Upload complete", total, total, false, 100))
             cleanupBatchState(batchId, total)
             Result.success()
         } catch (error: Throwable) {
@@ -105,7 +106,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             val message = error.message?.replace('\n', ' ')?.take(90) ?: error.javaClass.simpleName
 
             if (error is ExportException || error is IllegalArgumentException || error.message?.contains("Video file not found", true) == true || error.message?.contains("video dimensions", true) == true) {
-                notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Video preparation failed", completed, total, false, message))
+                notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Video preparation failed", completed, total, false, 0, message))
                 cleanupBatchState(batchId, total)
                 return Result.failure()
             }
@@ -113,12 +114,12 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             val retryCount = prefs.getInt("${batchId}_retry", 0)
             if (retryCount < MAX_INTERNAL_RETRIES) {
                 prefs.edit().putInt("${batchId}_retry", retryCount + 1).apply()
-                updateBatchNotification(batchId, "Retrying upload…")
+                updateBatchNotification(batchId, "Retrying upload…", 0)
                 delay(RETRY_DELAY_MS)
                 return doWork()
             }
 
-            notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Upload finished with errors", completed, total, false, message))
+            notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Upload finished with errors", completed, total, false, 0, message))
             cleanupBatchState(batchId, total)
             Result.failure()
         }
@@ -193,9 +194,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             }
 
             mainHandler.post(startRunnable)
-            continuation.invokeOnCancellation {
-                mainHandler.post { transformerHolder[0]?.cancel() }
-            }
+            continuation.invokeOnCancellation { mainHandler.post { transformerHolder[0]?.cancel() } }
         } catch (error: Throwable) {
             Log.e(TAG, "Could not prepare video", error)
             outputFile.delete()
@@ -205,12 +204,12 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         }
     }
 
-    private suspend fun uploadPhoto(baseUrl: String, token: String, path: String, filename: String): String = withContext(Dispatchers.IO) {
-        multipartPost("$baseUrl/photos/upload", token, listOf(Triple("file", File(path), filename)))
+    private suspend fun uploadPhoto(baseUrl: String, token: String, path: String, filename: String, onProgress: (Int) -> Unit): String = withContext(Dispatchers.IO) {
+        multipartPost("$baseUrl/photos/upload", token, listOf(Triple("file", File(path), filename)), onProgress)
     }
 
-    private suspend fun uploadVideo(baseUrl: String, token: String, originalPath: String, originalFilename: String, playbackPath: String): String = withContext(Dispatchers.IO) {
-        multipartPost("$baseUrl/photos/upload-video", token, listOf(Triple("original_file", File(originalPath), originalFilename), Triple("playback_file", File(playbackPath), "playback.mp4")))
+    private suspend fun uploadVideo(baseUrl: String, token: String, originalPath: String, originalFilename: String, playbackPath: String, onProgress: (Int) -> Unit): String = withContext(Dispatchers.IO) {
+        multipartPost("$baseUrl/photos/upload-video", token, listOf(Triple("original_file", File(originalPath), originalFilename), Triple("playback_file", File(playbackPath), "playback.mp4")), onProgress)
     }
 
     private suspend fun linkAlbumIfNeeded(baseUrl: String, token: String, albumId: Int, response: String) = withContext(Dispatchers.IO) {
@@ -230,7 +229,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         }
     }
 
-    private fun multipartPost(url: String, token: String, files: List<Triple<String, File, String>>): String {
+    private fun multipartPost(url: String, token: String, files: List<Triple<String, File, String>>, onProgress: (Int) -> Unit): String {
         val boundary = "----PhotoApp${UUID.randomUUID()}"
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -240,6 +239,9 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             setRequestProperty("Authorization", "Bearer $token")
             setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
         }
+        val totalBytes = files.sumOf { it.second.length() }
+        var uploadedBytes = 0L
+        var lastReported = -1
         try {
             connection.outputStream.use { output ->
                 for ((field, file, filename) in files) {
@@ -253,12 +255,19 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                             val read = input.read(buffer)
                             if (read < 0) break
                             output.write(buffer, 0, read)
+                            uploadedBytes += read
+                            val percent = if (totalBytes > 0) ((uploadedBytes * 100L) / totalBytes).toInt().coerceIn(0, 100) else 0
+                            if (percent != lastReported) {
+                                lastReported = percent
+                                onProgress(percent)
+                            }
                         }
                     }
                     output.write("\r\n".toByteArray())
                 }
                 output.write("--$boundary--\r\n".toByteArray())
             }
+            onProgress(100)
             val responseCode = connection.responseCode
             val response = if (responseCode in 200..299) connection.inputStream.bufferedReader().readText() else connection.errorStream?.bufferedReader()?.readText().orEmpty()
             if (responseCode !in 200..299) throw Exception("Upload failed ($responseCode): $response")
@@ -268,22 +277,22 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         }
     }
 
-    private fun updateBatchNotification(batchId: String, text: String) {
+    private fun updateBatchNotification(batchId: String, text: String, percent: Int) {
         val prefs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val completed = prefs.getInt("${batchId}_completed", 0)
         val total = prefs.getInt("${batchId}_total", 1)
-        notificationManager.notify(NOTIFICATION_ID, buildNotification(text, completed, total, true))
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(text, completed, total, true, percent))
     }
 
-    private fun buildNotification(text: String, completed: Int, total: Int, ongoing: Boolean, detail: String? = null) = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+    private fun buildNotification(text: String, completed: Int, total: Int, ongoing: Boolean, percent: Int, detail: String? = null) = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
         .setSmallIcon(com.example.photo_app.R.mipmap.ic_launcher)
         .setContentTitle("Photo Storage")
-        .setContentText(if (detail.isNullOrBlank()) text else "$text: $detail")
+        .setContentText(if (detail.isNullOrBlank()) "$text — $percent%" else "$text — $percent%: $detail")
         .setOngoing(ongoing)
         .setAutoCancel(!ongoing)
         .setOnlyAlertOnce(true)
         .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-        .setProgress(if (total > 0) total else 0, completed.coerceAtMost(total), false)
+        .setProgress(100, percent.coerceIn(0, 100), false)
         .build()
 
     private fun cleanupBatchState(batchId: String, total: Int) {
