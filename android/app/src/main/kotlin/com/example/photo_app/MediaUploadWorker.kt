@@ -93,7 +93,10 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                 updateBatchNotification(batchId, if (index + 1 == total) "Upload complete" else "Uploading ${index + 1} of $total")
             }
 
-            notificationManager.notify(NOTIFICATION_ID, buildNotification("Upload complete", total, total, false))
+            // WorkManager removes the foreground notification when the worker
+            // finishes. Use a separate notification ID for the final result
+            // so it survives after the foreground service stops.
+            notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Upload complete", total, total, false))
             cleanupBatchState(batchId, total)
             Result.success()
         } catch (error: Throwable) {
@@ -102,15 +105,11 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             val message = error.message?.replace('\n', ' ')?.take(90) ?: error.javaClass.simpleName
 
             if (error is ExportException || error is IllegalArgumentException || error.message?.contains("Video file not found", true) == true || error.message?.contains("video dimensions", true) == true) {
-                notificationManager.notify(NOTIFICATION_ID, buildNotification("Video preparation failed", completed, total, false, message))
+                notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Video preparation failed", completed, total, false, message))
                 cleanupBatchState(batchId, total)
                 return Result.failure()
             }
 
-            // Keep transient network failures inside this already-running
-            // foreground worker. Returning Result.retry() would make
-            // WorkManager start a new foreground service from the background,
-            // which Android 12+ can reject with ForegroundServiceStartNotAllowedException.
             val retryCount = prefs.getInt("${batchId}_retry", 0)
             if (retryCount < MAX_INTERNAL_RETRIES) {
                 prefs.edit().putInt("${batchId}_retry", retryCount + 1).apply()
@@ -119,7 +118,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                 return doWork()
             }
 
-            notificationManager.notify(NOTIFICATION_ID, buildNotification("Upload finished with errors", completed, total, false, message))
+            notificationManager.notify(COMPLETION_NOTIFICATION_ID, buildNotification("Upload finished with errors", completed, total, false, message))
             cleanupBatchState(batchId, total)
             Result.failure()
         }
@@ -304,6 +303,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         const val TYPE_VIDEO = "video"
         const val TYPE_PHOTO = "photo"
         const val NOTIFICATION_ID = 4101
+        const val COMPLETION_NOTIFICATION_ID = 4102
         const val CHANNEL_ID = "media_transfer"
         const val PREFS = "media_transfer_state"
         private const val MAX_INTERNAL_RETRIES = 3
