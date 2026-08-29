@@ -20,12 +20,21 @@ class UploadPhotosScreen extends StatefulWidget {
   State<UploadPhotosScreen> createState() => _UploadPhotosScreenState();
 }
 
+class _PreparedVideo {
+  final XFile media;
+  final String playbackPath;
+
+  const _PreparedVideo({required this.media, required this.playbackPath});
+}
+
 class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   final ImagePicker _picker = ImagePicker();
   final ApiService _apiService = ApiService();
 
   List<XFile> _selectedMedia = [];
   bool _isPreparing = false;
+  int _preparingVideo = 0;
+  int _totalVideos = 0;
 
   @override
   void initState() {
@@ -67,28 +76,66 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   Future<void> _uploadSelectedMedia() async {
     if (_selectedMedia.isEmpty || _isPreparing) return;
 
-    setState(() => _isPreparing = true);
+    final selected = List<XFile>.from(_selectedMedia);
+    final videos = selected.where(_isVideo).toList();
+
+    setState(() {
+      _isPreparing = true;
+      _preparingVideo = 0;
+      _totalVideos = videos.length;
+    });
 
     try {
-      for (final media in _selectedMedia) {
+      // Prepare every video before enqueueing the upload batch. This is
+      // important because the downloader's grouped notification counts only
+      // tasks that have already been enqueued. By preparing first, all
+      // selected media items exist in the batch before progress starts, so
+      // "Uploading X of Y" and the completion notification remain accurate.
+      final preparedVideos = <_PreparedVideo>[];
+      for (final video in videos) {
+        if (!mounted) return;
+        setState(() => _preparingVideo++);
+
+        final playbackPath = await _apiService.createVideoPlayback(video);
+        preparedVideos.add(
+          _PreparedVideo(media: video, playbackPath: playbackPath),
+        );
+      }
+
+      final preparedByPath = <String, _PreparedVideo>{
+        for (final video in preparedVideos) video.media.path: video,
+      };
+
+      // Enqueue every selected media item only after all video preparation is
+      // complete. The notification group therefore starts with the real batch
+      // size, including videos that took time to prepare on the phone.
+      for (final media in selected) {
         if (_isVideo(media)) {
-          // Transcoding happens on the phone. Once prepared, the actual
-          // original + playback upload runs in Android background transfer.
-          final playbackPath = await _apiService.createVideoPlayback(media);
-          await TransferManager.enqueueVideoUpload(
+          final prepared = preparedByPath[media.path];
+          if (prepared == null) {
+            throw Exception('Video preparation result is missing');
+          }
+
+          final queued = await TransferManager.enqueueVideoUpload(
             originalPath: media.path,
             originalFilename: media.name,
-            playbackPath: playbackPath,
+            playbackPath: prepared.playbackPath,
             token: widget.token,
             albumId: widget.albumId,
           );
+          if (!queued) {
+            throw Exception('Could not queue ${media.name}');
+          }
         } else {
-          await TransferManager.enqueuePhotoUpload(
+          final queued = await TransferManager.enqueuePhotoUpload(
             filePath: media.path,
             filename: media.name,
             token: widget.token,
             albumId: widget.albumId,
           );
+          if (!queued) {
+            throw Exception('Could not queue ${media.name}');
+          }
         }
       }
 
@@ -143,10 +190,10 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
                     child: FilledButton(
                       onPressed: _isPreparing ? null : _uploadSelectedMedia,
                       child: _isPreparing
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                          ? Text(
+                              _totalVideos > 0
+                                  ? 'Preparing $_preparingVideo/$_totalVideos'
+                                  : 'Preparing...',
                             )
                           : Text('Upload ${_selectedMedia.length}'),
                     ),
