@@ -5,6 +5,8 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.MediaItem
@@ -33,6 +35,7 @@ import kotlin.coroutines.resumeWithException
 
 class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : CoroutineWorker(appContext, workerParams) {
     private val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
         ensureNotificationChannel()
@@ -144,26 +147,45 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             }
 
             Log.i(TAG, "Starting video preparation: $inputPath (${width}x${height}) -> ${outputFile.absolutePath}")
-            val transformer = Transformer.Builder(applicationContext)
-                .setVideoMimeType(MimeTypes.VIDEO_H264)
-                .setAudioMimeType(MimeTypes.AUDIO_AAC)
-                .setPortraitEncodingEnabled(true)
-                .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: androidx.media3.transformer.Composition, exportResult: ExportResult) {
-                        Log.i(TAG, "Video preparation completed: ${outputFile.length()} bytes")
-                        if (outputFile.isFile && outputFile.length() > 0L) continuation.resume(outputFile.absolutePath)
-                        else continuation.resumeWithException(Exception("Playback output is empty"))
-                    }
-                    override fun onError(composition: androidx.media3.transformer.Composition, exportResult: ExportResult, exportException: ExportException) {
-                        Log.e(TAG, "Video preparation failed", exportException)
-                        outputFile.delete()
-                        if (continuation.isActive) continuation.resumeWithException(exportException)
-                    }
-                }).build()
-            transformer.start(builder.build(), outputFile.absolutePath)
-            continuation.invokeOnCancellation { transformer.cancel() }
+            val transformerHolder = arrayOfNulls<Transformer>(1)
+            val startRunnable = Runnable {
+                try {
+                    val transformer = Transformer.Builder(applicationContext)
+                        .setLooper(Looper.getMainLooper())
+                        .setVideoMimeType(MimeTypes.VIDEO_H264)
+                        .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                        .setPortraitEncodingEnabled(true)
+                        .addListener(object : Transformer.Listener {
+                            override fun onCompleted(composition: androidx.media3.transformer.Composition, exportResult: ExportResult) {
+                                Log.i(TAG, "Video preparation completed: ${outputFile.length()} bytes")
+                                if (outputFile.isFile && outputFile.length() > 0L) continuation.resume(outputFile.absolutePath)
+                                else if (continuation.isActive) continuation.resumeWithException(Exception("Playback output is empty"))
+                            }
+
+                            override fun onError(composition: androidx.media3.transformer.Composition, exportResult: ExportResult, exportException: ExportException) {
+                                Log.e(TAG, "Video preparation failed", exportException)
+                                outputFile.delete()
+                                if (continuation.isActive) continuation.resumeWithException(exportException)
+                            }
+                        })
+                        .build()
+                    transformerHolder[0] = transformer
+                    transformer.start(builder.build(), outputFile.absolutePath)
+                } catch (error: Throwable) {
+                    Log.e(TAG, "Could not start video preparation", error)
+                    outputFile.delete()
+                    if (continuation.isActive) continuation.resumeWithException(error)
+                }
+            }
+
+            mainHandler.post(startRunnable)
+            continuation.invokeOnCancellation {
+                mainHandler.post {
+                    transformerHolder[0]?.cancel()
+                }
+            }
         } catch (error: Throwable) {
-            Log.e(TAG, "Could not start video preparation", error)
+            Log.e(TAG, "Could not prepare video", error)
             outputFile.delete()
             if (continuation.isActive) continuation.resumeWithException(error)
         } finally {
