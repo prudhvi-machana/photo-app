@@ -70,47 +70,29 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
     setState(() => _isPreparing = true);
 
     try {
-      var queuedCount = 0;
-      var videoCount = 0;
-
       for (final media in _selectedMedia) {
         if (_isVideo(media)) {
-          videoCount++;
-          if (mounted) {
-            setState(() {});
-          }
-
           // Transcoding happens on the phone. Once prepared, the actual
           // original + playback upload runs in Android background transfer.
           final playbackPath = await _apiService.createVideoPlayback(media);
-          final queued = await TransferManager.enqueueVideoUpload(
+          await TransferManager.enqueueVideoUpload(
             originalPath: media.path,
             originalFilename: media.name,
             playbackPath: playbackPath,
             token: widget.token,
             albumId: widget.albumId,
           );
-          if (queued) queuedCount++;
         } else {
-          final queued = await TransferManager.enqueuePhotoUpload(
+          await TransferManager.enqueuePhotoUpload(
             filePath: media.path,
             filename: media.name,
             token: widget.token,
             albumId: widget.albumId,
           );
-          if (queued) queuedCount++;
         }
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '$queuedCount of ${_selectedMedia.length} media queued for background upload'
-            '${videoCount > 0 ? ' ($videoCount video${videoCount == 1 ? '' : 's'} prepared on phone)' : ''}.',
-          ),
-        ),
-      );
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
