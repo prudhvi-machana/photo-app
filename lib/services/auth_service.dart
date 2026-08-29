@@ -28,19 +28,44 @@ class AuthService {
       throw Exception('Invalid username or password');
     }
 
-    final data = jsonDecode(response.body);
-    final token = data['access_token'] as String;
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final accessToken = data['access_token'] as String;
+    final refreshToken = data['refresh_token'] as String;
 
-    await _tokenStorage.saveToken(token);
+    await _tokenStorage.saveTokens(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+    );
 
-    return token;
+    return accessToken;
   }
 
-  Future<String?> getToken() async {
-    return _tokenStorage.getToken();
+  Future<String?> getToken() async => _tokenStorage.getToken();
+
+  Future<String?> getRefreshToken() async => _tokenStorage.getRefreshToken();
+
+  Future<String?> refreshAccessToken() async {
+    final refreshToken = await _tokenStorage.getRefreshToken();
+    if (refreshToken == null || refreshToken.isEmpty) return null;
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/refresh'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'refresh_token': refreshToken}),
+    );
+
+    if (response.statusCode != 200) return null;
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final accessToken = data['access_token'] as String;
+    final newRefreshToken = data['refresh_token'] as String? ?? refreshToken;
+
+    await _tokenStorage.saveTokens(
+      accessToken: accessToken,
+      refreshToken: newRefreshToken,
+    );
+    return accessToken;
   }
 
-  Future<void> logout() async {
-    await _tokenStorage.clearToken();
-  }
+  Future<void> logout() async => _tokenStorage.clearToken();
 }
