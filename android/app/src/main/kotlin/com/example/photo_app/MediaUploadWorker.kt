@@ -20,6 +20,7 @@ import androidx.media3.transformer.Transformer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -27,13 +28,8 @@ import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-class MediaUploadWorker(
-    appContext: Context,
-    workerParams: WorkerParameters,
-) : CoroutineWorker(appContext, workerParams) {
-
-    private val notificationManager =
-        applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : CoroutineWorker(appContext, workerParams) {
+    private val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
         ensureNotificationChannel()
@@ -45,6 +41,7 @@ class MediaUploadWorker(
         val type = inputData.getString(KEY_TYPE) ?: return Result.failure()
         val token = inputData.getString(KEY_TOKEN) ?: return Result.failure()
         val baseUrl = inputData.getString(KEY_BASE_URL) ?: return Result.failure()
+        val albumId = inputData.getInt(KEY_ALBUM_ID, -1)
         val originalPath = inputData.getString(KEY_ORIGINAL_PATH) ?: return Result.failure()
         val originalFilename = inputData.getString(KEY_ORIGINAL_FILENAME) ?: "media"
 
@@ -52,7 +49,7 @@ class MediaUploadWorker(
         ensureNotificationChannel()
 
         return try {
-            if (type == TYPE_VIDEO) {
+            val response = if (type == TYPE_VIDEO) {
                 updateBatchNotification(batchId, "Preparing $originalFilename…")
                 val playbackPath = transcodeVideo(originalPath)
                 try {
@@ -65,12 +62,17 @@ class MediaUploadWorker(
                 uploadPhoto(baseUrl, token, originalPath, originalFilename)
             }
 
+            if (albumId >= 0) {
+                val photoId = JSONObject(response).optInt("id", -1)
+                if (photoId >= 0) {
+                    linkAlbum(baseUrl, token, albumId, photoId)
+                }
+            }
+
             markCompleted(batchId)
             Result.success()
         } catch (error: Throwable) {
-            if (runAttemptCount < 2) {
-                Result.retry()
-            } else {
+            if (runAttemptCount < 2) Result.retry() else {
                 markFailed(batchId)
                 Result.failure()
             }
@@ -78,68 +80,61 @@ class MediaUploadWorker(
     }
 
     @OptIn(UnstableApi::class)
-    private suspend fun transcodeVideo(inputPath: String): String =
-        suspendCancellableCoroutine { continuation ->
-            val inputFile = File(inputPath)
-            require(inputFile.isFile) { "Video file not found" }
-
-            val outputFile = File(applicationContext.cacheDir, "playback-${UUID.randomUUID()}.mp4")
-            val retriever = android.media.MediaMetadataRetriever()
-            try {
-                retriever.setDataSource(inputPath)
-                val width = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-                val height = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-                val builder = EditedMediaItem.Builder(MediaItem.fromUri(android.net.Uri.fromFile(inputFile)))
-
-                if (width > 1920 || height > 1920) {
-                    val scale = minOf(1920f / width, 1920f / height)
-                    val effect = ScaleAndRotateTransformation.Builder().setScale(scale, scale).build()
-                    builder.setEffects(Effects(emptyList(), listOf(effect)))
-                }
-
-                val transformer = Transformer.Builder(applicationContext)
-                    .setVideoMimeType(MimeTypes.VIDEO_H264)
-                    .setAudioMimeType(MimeTypes.AUDIO_AAC)
-                    .setPortraitEncodingEnabled(true)
-                    .addListener(object : Transformer.Listener {
-                        override fun onCompleted(composition: androidx.media3.transformer.Composition, exportResult: ExportResult) {
-                            if (outputFile.isFile && outputFile.length() > 0L) {
-                                continuation.resume(outputFile.absolutePath)
-                            } else {
-                                continuation.resumeWithException(Exception("Playback output is empty"))
-                            }
-                        }
-
-                        override fun onError(composition: androidx.media3.transformer.Composition, exportResult: ExportResult, exportException: ExportException) {
-                            outputFile.delete()
-                            continuation.resumeWithException(exportException)
-                        }
-                    })
-                    .build()
-
-                transformer.start(builder.build(), outputFile.absolutePath)
-                continuation.invokeOnCancellation { transformer.cancel() }
-            } finally {
-                retriever.release()
+    private suspend fun transcodeVideo(inputPath: String): String = suspendCancellableCoroutine { continuation ->
+        val inputFile = File(inputPath)
+        require(inputFile.isFile) { "Video file not found" }
+        val outputFile = File(applicationContext.cacheDir, "playback-${UUID.randomUUID()}.mp4")
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(inputPath)
+            val width = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val height = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val builder = EditedMediaItem.Builder(MediaItem.fromUri(android.net.Uri.fromFile(inputFile)))
+            if (width > 1920 || height > 1920) {
+                val scale = minOf(1920f / width, 1920f / height)
+                builder.setEffects(Effects(emptyList(), listOf(ScaleAndRotateTransformation.Builder().setScale(scale, scale).build())))
             }
+            val transformer = Transformer.Builder(applicationContext)
+                .setVideoMimeType(MimeTypes.VIDEO_H264)
+                .setAudioMimeType(MimeTypes.AUDIO_AAC)
+                .setPortraitEncodingEnabled(true)
+                .addListener(object : Transformer.Listener {
+                    override fun onCompleted(composition: androidx.media3.transformer.Composition, exportResult: ExportResult) {
+                        if (outputFile.isFile && outputFile.length() > 0L) continuation.resume(outputFile.absolutePath)
+                        else continuation.resumeWithException(Exception("Playback output is empty"))
+                    }
+                    override fun onError(composition: androidx.media3.transformer.Composition, exportResult: ExportResult, exportException: ExportException) {
+                        outputFile.delete()
+                        continuation.resumeWithException(exportException)
+                    }
+                }).build()
+            transformer.start(builder.build(), outputFile.absolutePath)
+            continuation.invokeOnCancellation { transformer.cancel() }
+        } finally {
+            retriever.release()
         }
+    }
 
     private suspend fun uploadPhoto(baseUrl: String, token: String, path: String, filename: String) = withContext(Dispatchers.IO) {
         multipartPost("$baseUrl/photos/upload", token, listOf(Triple("file", File(path), filename)))
     }
 
     private suspend fun uploadVideo(baseUrl: String, token: String, originalPath: String, originalFilename: String, playbackPath: String) = withContext(Dispatchers.IO) {
-        multipartPost(
-            "$baseUrl/photos/upload-video",
-            token,
-            listOf(
-                Triple("original_file", File(originalPath), originalFilename),
-                Triple("playback_file", File(playbackPath), "playback.mp4"),
-            ),
-        )
+        multipartPost("$baseUrl/photos/upload-video", token, listOf(Triple("original_file", File(originalPath), originalFilename), Triple("playback_file", File(playbackPath), "playback.mp4")))
     }
 
-    private fun multipartPost(url: String, token: String, files: List<Triple<String, File, String>>) {
+    private suspend fun linkAlbum(baseUrl: String, token: String, albumId: Int, photoId: Int) = withContext(Dispatchers.IO) {
+        val connection = (URL("$baseUrl/albums/$albumId/photos/$photoId").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 30_000
+            readTimeout = 30_000
+            setRequestProperty("Authorization", "Bearer $token")
+        }
+        if (connection.responseCode !in 200..299) throw Exception("Album link failed: ${connection.responseCode}")
+        connection.disconnect()
+    }
+
+    private fun multipartPost(url: String, token: String, files: List<Triple<String, File, String>>): String {
         val boundary = "----PhotoApp${UUID.randomUUID()}"
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -149,7 +144,6 @@ class MediaUploadWorker(
             setRequestProperty("Authorization", "Bearer $token")
             setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
         }
-
         connection.outputStream.use { output ->
             for ((field, file, filename) in files) {
                 require(file.isFile) { "Upload file not found: ${file.absolutePath}" }
@@ -168,39 +162,30 @@ class MediaUploadWorker(
             }
             output.write("--$boundary--\r\n".toByteArray())
         }
-
         val responseCode = connection.responseCode
-        if (responseCode !in 200..299) {
-            val body = runCatching { connection.errorStream?.bufferedReader()?.readText() }.getOrNull()
-            throw Exception("Upload failed ($responseCode): ${body ?: "unknown error"}")
-        }
+        val response = if (responseCode in 200..299) connection.inputStream.bufferedReader().readText() else connection.errorStream?.bufferedReader()?.readText().orEmpty()
         connection.disconnect()
+        if (responseCode !in 200..299) throw Exception("Upload failed ($responseCode): $response")
+        return response
     }
 
     private fun ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            notificationManager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Media transfers", NotificationManager.IMPORTANCE_LOW),
-            )
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) notificationManager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Media transfers", NotificationManager.IMPORTANCE_LOW))
     }
 
-    private fun buildNotification(text: String, completed: Int, total: Int, ongoing: Boolean) =
-        NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(com.example.photo_app.R.mipmap.ic_launcher)
-            .setContentTitle("Photo Storage")
-            .setContentText(text)
-            .setOngoing(ongoing)
-            .setAutoCancel(!ongoing)
-            .setOnlyAlertOnce(true)
-            .setProgress(if (total > 0) total else 0, completed, false)
-            .build()
+    private fun buildNotification(text: String, completed: Int, total: Int, ongoing: Boolean) = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+        .setSmallIcon(com.example.photo_app.R.mipmap.ic_launcher)
+        .setContentTitle("Photo Storage")
+        .setContentText(text)
+        .setOngoing(ongoing)
+        .setAutoCancel(!ongoing)
+        .setOnlyAlertOnce(true)
+        .setProgress(if (total > 0) total else 0, completed, false)
+        .build()
 
     private fun updateBatchNotification(batchId: String, text: String) {
         val prefs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val completed = prefs.getInt("${batchId}_completed", 0)
-        val total = prefs.getInt("${batchId}_total", 1)
-        notificationManager.notify(NOTIFICATION_ID, buildNotification(text, completed, total, true))
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(text, prefs.getInt("${batchId}_completed", 0), prefs.getInt("${batchId}_total", 1), true))
     }
 
     private fun markCompleted(batchId: String) {
@@ -208,10 +193,7 @@ class MediaUploadWorker(
         val completed = prefs.getInt("${batchId}_completed", 0) + 1
         val total = prefs.getInt("${batchId}_total", 1)
         prefs.edit().putInt("${batchId}_completed", completed).apply()
-        notificationManager.notify(
-            NOTIFICATION_ID,
-            buildNotification(if (completed >= total) "Upload complete" else "Uploading $completed of $total", completed, total, completed < total),
-        )
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(if (completed >= total) "Upload complete" else "Uploading $completed of $total", completed, total, completed < total))
     }
 
     private fun markFailed(batchId: String) {
@@ -227,6 +209,7 @@ class MediaUploadWorker(
         const val KEY_TYPE = "type"
         const val KEY_TOKEN = "token"
         const val KEY_BASE_URL = "baseUrl"
+        const val KEY_ALBUM_ID = "albumId"
         const val KEY_ORIGINAL_PATH = "originalPath"
         const val KEY_ORIGINAL_FILENAME = "originalFilename"
         const val TYPE_VIDEO = "video"
