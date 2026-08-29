@@ -66,9 +66,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
   }
 
   Future<void> _uploadSelectedMedia() async {
-    if ((_selectedPhotos.isEmpty && _selectedVideo == null) || _isUploading) {
-      return;
-    }
+    if ((_selectedPhotos.isEmpty && _selectedVideo == null) || _isUploading) return;
 
     setState(() => _isUploading = true);
 
@@ -76,7 +74,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
       int uploadedCount = 0;
 
       if (_selectedVideo != null) {
-        final uploaded = await _apiService.uploadPhoto(_selectedVideo!);
+        final uploaded = await _apiService.uploadVideoWithPlayback(_selectedVideo!);
         if (widget.albumId != null) {
           await _apiService.addPhotoToAlbum(widget.albumId!, uploaded.id);
         }
@@ -122,9 +120,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            Expanded(
-              child: hasSelection ? _buildPreview() : _buildEmptyState(),
-            ),
+            Expanded(child: hasSelection ? _buildPreview() : _buildEmptyState()),
             const SizedBox(height: 16),
             if (!hasSelection)
               Row(
@@ -165,11 +161,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
                               width: 20,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : Text(
-                              _selectedVideo != null
-                                  ? 'Upload Video'
-                                  : 'Upload ${_selectedPhotos.length}',
-                            ),
+                          : Text(_selectedVideo != null ? 'Upload Video' : 'Upload ${_selectedPhotos.length}'),
                     ),
                   ),
                 ],
@@ -232,8 +224,7 @@ class _UploadPhotosScreenState extends State<UploadPhotosScreen> {
           child: Image.file(
             File(photo.path),
             fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) =>
-                const Center(child: Icon(Icons.image)),
+            errorBuilder: (context, error, stackTrace) => const Center(child: Icon(Icons.image)),
           ),
         );
       },
