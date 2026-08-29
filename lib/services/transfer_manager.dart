@@ -4,19 +4,25 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'api_config.dart';
+import 'token_storage.dart';
 
 class TransferManager {
   static const MethodChannel _channel = MethodChannel('photo_app/background_transfer');
+  static final TokenStorage _tokenStorage = TokenStorage();
 
   static Future<void> initialize() async {}
 
   static Future<String> enqueueMediaBatch({
     required List<MediaTransferItem> items,
     required String token,
-    required String refreshToken,
     int? albumId,
   }) async {
     if (items.isEmpty) throw Exception('No media selected');
+
+    final refreshToken = await _tokenStorage.getRefreshToken();
+    if (refreshToken == null || refreshToken.isEmpty) {
+      throw Exception('Session cannot be refreshed. Please log in again.');
+    }
 
     final stagingDirectory = Directory('${(await getApplicationSupportDirectory()).path}/pending_uploads');
     await stagingDirectory.create(recursive: true);
