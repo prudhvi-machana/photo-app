@@ -79,6 +79,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
                 }
 
                 prefs.edit().putBoolean("${batchId}_item_$index", true).putInt("${batchId}_completed", index + 1).apply()
+                File(path).delete()
                 updateBatchNotification(batchId, if (index + 1 == total) "Upload complete" else "Uploading ${index + 1} of $total")
             }
 
