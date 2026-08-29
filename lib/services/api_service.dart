@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -13,6 +14,8 @@ import 'api_config.dart';
 
 class ApiService {
   final String baseUrl = ApiConfig.baseUrl;
+  static const MethodChannel _videoChannel =
+      MethodChannel('photo_app/video_transcoder');
 
   String? token;
 
@@ -120,6 +123,58 @@ class ApiService {
     return Photo.fromJson(jsonDecode(body.body));
   }
 
+  Future<Photo> uploadVideoWithPlayback(XFile original) async {
+    if (token == null) throw Exception('Not authenticated');
+
+    final playbackPath = await _videoChannel.invokeMethod<String>(
+      'createPlaybackVideo',
+      {'inputPath': original.path},
+    );
+
+    if (playbackPath == null || playbackPath.isEmpty) {
+      throw Exception('Failed to create playback video');
+    }
+
+    final playbackFile = File(playbackPath);
+    if (!await playbackFile.exists()) {
+      throw Exception('Playback file was not created');
+    }
+
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/photos/upload-video'),
+    );
+    request.headers['Authorization'] = 'Bearer $token';
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'original_file',
+        original.path,
+        filename: original.name,
+      ),
+    );
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'playback_file',
+        playbackPath,
+        filename: 'playback.mp4',
+        contentType: MediaType('video', 'mp4'),
+      ),
+    );
+
+    try {
+      final response = await request.send();
+      final body = await http.Response.fromStream(response);
+      if (body.statusCode != 200 && body.statusCode != 201) {
+        throw Exception('Video upload failed: ${body.statusCode} ${body.body}');
+      }
+      return Photo.fromJson(jsonDecode(body.body));
+    } finally {
+      try {
+        await playbackFile.delete();
+      } catch (_) {}
+    }
+  }
+
   Future<List<int>> downloadPhoto(int photoId) async {
     final response = await http.get(
       Uri.parse('$baseUrl/photos/$photoId'),
@@ -131,8 +186,6 @@ class ApiService {
     return response.bodyBytes;
   }
 
-  /// Streams a media file to a temporary file without keeping the whole file
-  /// in Dart memory. This is important for large videos.
   Future<File> downloadPhotoToTempFile(
     int photoId,
     String filename,
