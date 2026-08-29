@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -88,22 +89,28 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             cleanupBatchState(batchId, total)
             Result.success()
         } catch (error: Throwable) {
+            Log.e(TAG, "Media transfer failed (attempt ${runAttemptCount + 1})", error)
+            val completed = prefs.getInt("${batchId}_completed", 0)
+            val message = error.message?.replace('\n', ' ')?.take(90) ?: error.javaClass.simpleName
+            if (error is ExportException || error is IllegalArgumentException || error.message?.contains("Video file not found", true) == true || error.message?.contains("video dimensions", true) == true) {
+                notificationManager.notify(NOTIFICATION_ID, buildNotification("Video preparation failed", completed, total, false, message))
+                cleanupBatchState(batchId, total)
+                return Result.failure()
+            }
             if (runAttemptCount < 2) {
+                notificationManager.notify(NOTIFICATION_ID, buildNotification("Retrying upload…", completed, total, false, message))
                 Result.retry()
             } else {
-                val completed = prefs.getInt("${batchId}_completed", 0)
-                notificationManager.notify(NOTIFICATION_ID, buildNotification("Upload finished with errors", completed, total, false))
+                notificationManager.notify(NOTIFICATION_ID, buildNotification("Upload finished with errors", completed, total, false, message))
                 Result.failure()
             }
         }
     }
 
-    private fun createForegroundInfo(notification: android.app.Notification): ForegroundInfo {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(NOTIFICATION_ID, notification)
-        }
+    private fun createForegroundInfo(notification: android.app.Notification): ForegroundInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+    } else {
+        ForegroundInfo(NOTIFICATION_ID, notification)
     }
 
     private fun ensureNotificationChannel() {
@@ -128,27 +135,37 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
             retriever.setDataSource(inputPath)
             val width = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
             val height = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            require(width > 0 && height > 0) { "Unable to read video dimensions" }
+
             val builder = EditedMediaItem.Builder(MediaItem.fromUri(android.net.Uri.fromFile(inputFile)))
             if (width > 1920 || height > 1920) {
                 val scale = minOf(1920f / width, 1920f / height)
                 builder.setEffects(Effects(emptyList(), listOf(ScaleAndRotateTransformation.Builder().setScale(scale, scale).build())))
             }
+
+            Log.i(TAG, "Starting video preparation: $inputPath (${width}x${height}) -> ${outputFile.absolutePath}")
             val transformer = Transformer.Builder(applicationContext)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .setPortraitEncodingEnabled(true)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: androidx.media3.transformer.Composition, exportResult: ExportResult) {
+                        Log.i(TAG, "Video preparation completed: ${outputFile.length()} bytes")
                         if (outputFile.isFile && outputFile.length() > 0L) continuation.resume(outputFile.absolutePath)
                         else continuation.resumeWithException(Exception("Playback output is empty"))
                     }
                     override fun onError(composition: androidx.media3.transformer.Composition, exportResult: ExportResult, exportException: ExportException) {
+                        Log.e(TAG, "Video preparation failed", exportException)
                         outputFile.delete()
-                        continuation.resumeWithException(exportException)
+                        if (continuation.isActive) continuation.resumeWithException(exportException)
                     }
                 }).build()
             transformer.start(builder.build(), outputFile.absolutePath)
             continuation.invokeOnCancellation { transformer.cancel() }
+        } catch (error: Throwable) {
+            Log.e(TAG, "Could not start video preparation", error)
+            outputFile.delete()
+            if (continuation.isActive) continuation.resumeWithException(error)
         } finally {
             retriever.release()
         }
@@ -224,10 +241,10 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
         notificationManager.notify(NOTIFICATION_ID, buildNotification(text, completed, total, true))
     }
 
-    private fun buildNotification(text: String, completed: Int, total: Int, ongoing: Boolean) = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+    private fun buildNotification(text: String, completed: Int, total: Int, ongoing: Boolean, detail: String? = null) = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
         .setSmallIcon(com.example.photo_app.R.mipmap.ic_launcher)
         .setContentTitle("Photo Storage")
-        .setContentText(text)
+        .setContentText(if (detail.isNullOrBlank()) text else "$text: $detail")
         .setOngoing(ongoing)
         .setAutoCancel(!ongoing)
         .setOnlyAlertOnce(true)
@@ -243,6 +260,7 @@ class MediaUploadWorker(appContext: Context, workerParams: WorkerParameters) : C
     }
 
     companion object {
+        private const val TAG = "PhotoAppTransfer"
         const val KEY_BATCH_ID = "batchId"
         const val KEY_TOKEN = "token"
         const val KEY_BASE_URL = "baseUrl"
