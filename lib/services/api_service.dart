@@ -98,9 +98,7 @@ class ApiService {
     return Photo.fromJson(jsonDecode(body.body));
   }
 
-  Future<Photo> uploadVideoWithPlayback(XFile original) async {
-    if (token == null) throw Exception('Not authenticated');
-
+  Future<String> createVideoPlayback(XFile original) async {
     final playbackPath = await _videoChannel.invokeMethod<String>(
       'createPlaybackVideo',
       {'inputPath': original.path},
@@ -114,6 +112,15 @@ class ApiService {
     if (!await playbackFile.exists()) {
       throw Exception('Playback file was not created');
     }
+
+    return playbackPath;
+  }
+
+  Future<Photo> uploadVideoWithPlayback(XFile original) async {
+    if (token == null) throw Exception('Not authenticated');
+
+    final playbackPath = await createVideoPlayback(original);
+    final playbackFile = File(playbackPath);
 
     final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/photos/upload-video'));
     request.headers['Authorization'] = 'Bearer $token';
