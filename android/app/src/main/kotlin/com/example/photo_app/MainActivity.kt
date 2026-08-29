@@ -15,6 +15,7 @@ import java.util.UUID
 class MainActivity : FlutterActivity() {
     private val mediaStoreChannel = "photo_app/media_store"
     private val transferChannel = "photo_app/background_transfer"
+    private val downloadChannel = "photo_app/background_download"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -75,6 +76,40 @@ class MainActivity : FlutterActivity() {
                         .putInt("${batchId}_failed", 0)
                         .apply()
 
+                    WorkManager.getInstance(applicationContext).enqueue(request)
+                    result.success(batchId)
+                } catch (e: Exception) {
+                    result.error("QUEUE_FAILED", e.message, null)
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, downloadChannel)
+            .setMethodCallHandler { call, result ->
+                if (call.method != "enqueueDownload") {
+                    result.notImplemented()
+                    return@setMethodCallHandler
+                }
+                try {
+                    val token = call.argument<String>("token") ?: throw IllegalArgumentException("Missing token")
+                    val refreshToken = call.argument<String>("refreshToken") ?: throw IllegalArgumentException("Missing refresh token")
+                    val baseUrl = call.argument<String>("baseUrl") ?: throw IllegalArgumentException("Missing base URL")
+                    val photoId = call.argument<Int>("photoId") ?: throw IllegalArgumentException("Missing photo ID")
+                    val filename = call.argument<String>("filename") ?: "photo"
+                    val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
+                    val batchId = UUID.randomUUID().toString()
+                    val data = Data.Builder()
+                        .putString(MediaDownloadWorker.KEY_BATCH_ID, batchId)
+                        .putString(MediaDownloadWorker.KEY_TOKEN, token)
+                        .putString(MediaDownloadWorker.KEY_REFRESH_TOKEN, refreshToken)
+                        .putString(MediaDownloadWorker.KEY_BASE_URL, baseUrl)
+                        .putInt(MediaDownloadWorker.KEY_PHOTO_ID, photoId)
+                        .putString(MediaDownloadWorker.KEY_FILENAME, filename)
+                        .putString(MediaDownloadWorker.KEY_MIME_TYPE, mimeType)
+                        .build()
+                    val request = OneTimeWorkRequestBuilder<MediaDownloadWorker>()
+                        .setInputData(data)
+                        .addTag(batchId)
+                        .build()
                     WorkManager.getInstance(applicationContext).enqueue(request)
                     result.success(batchId)
                 } catch (e: Exception) {
