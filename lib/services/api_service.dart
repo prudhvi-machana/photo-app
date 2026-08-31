@@ -14,8 +14,7 @@ import 'api_config.dart';
 
 class ApiService {
   final String baseUrl = ApiConfig.baseUrl;
-  static const MethodChannel _videoChannel =
-      MethodChannel('photo_app/video_transcoder');
+  static const MethodChannel _videoChannel = MethodChannel('photo_app/video_transcoder');
 
   String? token;
 
@@ -24,14 +23,8 @@ class ApiService {
   }
 
   Map<String, String> get _headers {
-    final headers = <String, String>{
-      'Content-Type': 'application/json',
-    };
-
-    if (token != null) {
-      headers['Authorization'] = 'Bearer $token';
-    }
-
+    final headers = <String, String>{'Content-Type': 'application/json'};
+    if (token != null) headers['Authorization'] = 'Bearer $token';
     return headers;
   }
 
@@ -43,23 +36,13 @@ class ApiService {
   }
 
   Future<Album> createAlbum(String name) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/albums'),
-      headers: _headers,
-      body: jsonEncode({'name': name}),
-    );
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception('Failed to create album');
-    }
+    final response = await http.post(Uri.parse('$baseUrl/albums'), headers: _headers, body: jsonEncode({'name': name}));
+    if (response.statusCode != 200 && response.statusCode != 201) throw Exception('Failed to create album');
     return Album.fromJson(jsonDecode(response.body));
   }
 
   Future<Album> updateAlbum(int albumId, String name) async {
-    final response = await http.patch(
-      Uri.parse('$baseUrl/albums/$albumId'),
-      headers: _headers,
-      body: jsonEncode({'name': name}),
-    );
+    final response = await http.patch(Uri.parse('$baseUrl/albums/$albumId'), headers: _headers, body: jsonEncode({'name': name}));
     if (response.statusCode != 200) throw Exception('Failed to update album');
     return Album.fromJson(jsonDecode(response.body));
   }
@@ -67,6 +50,13 @@ class ApiService {
   Future<void> deleteAlbum(int albumId) async {
     final response = await http.delete(Uri.parse('$baseUrl/albums/$albumId'), headers: _headers);
     if (response.statusCode != 200) throw Exception('Failed to delete album');
+  }
+
+  Future<List<Photo>> getPhotos() async {
+    final response = await http.get(Uri.parse('$baseUrl/photos'), headers: _headers);
+    if (response.statusCode != 200) throw Exception('Failed to load photos');
+    final List<dynamic> data = jsonDecode(response.body);
+    return data.map((json) => Photo.fromJson(json)).toList();
   }
 
   Future<List<Photo>> getRecentPhotos() async {
@@ -85,75 +75,43 @@ class ApiService {
 
   Future<Photo> uploadPhoto(XFile photo) async {
     if (token == null) throw Exception('Not authenticated');
-
     final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/photos/upload'));
     request.headers['Authorization'] = 'Bearer $token';
     request.files.add(await http.MultipartFile.fromPath('file', photo.path, filename: photo.name));
-
     final response = await request.send();
     final body = await http.Response.fromStream(response);
-    if (body.statusCode != 200 && body.statusCode != 201) {
-      throw Exception('Upload failed: ${body.statusCode} ${body.body}');
-    }
+    if (body.statusCode != 200 && body.statusCode != 201) throw Exception('Upload failed: ${body.statusCode} ${body.body}');
     return Photo.fromJson(jsonDecode(body.body));
   }
 
   Future<String> createVideoPlayback(XFile original) async {
-    final playbackPath = await _videoChannel.invokeMethod<String>(
-      'createPlaybackVideo',
-      {'inputPath': original.path},
-    );
-
-    if (playbackPath == null || playbackPath.isEmpty) {
-      throw Exception('Failed to create playback video');
-    }
-
+    final playbackPath = await _videoChannel.invokeMethod<String>('createPlaybackVideo', {'inputPath': original.path});
+    if (playbackPath == null || playbackPath.isEmpty) throw Exception('Failed to create playback video');
     final playbackFile = File(playbackPath);
-    if (!await playbackFile.exists()) {
-      throw Exception('Playback file was not created');
-    }
-
+    if (!await playbackFile.exists()) throw Exception('Playback file was not created');
     return playbackPath;
   }
 
   Future<Photo> uploadVideoWithPlayback(XFile original) async {
     if (token == null) throw Exception('Not authenticated');
-
     final playbackPath = await createVideoPlayback(original);
     final playbackFile = File(playbackPath);
-
     final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/photos/upload-video'));
     request.headers['Authorization'] = 'Bearer $token';
-    request.files.add(await http.MultipartFile.fromPath(
-      'original_file',
-      original.path,
-      filename: original.name,
-    ));
-    request.files.add(await http.MultipartFile.fromPath(
-      'playback_file',
-      playbackPath,
-      filename: 'playback.mp4',
-    ));
-
+    request.files.add(await http.MultipartFile.fromPath('original_file', original.path, filename: original.name));
+    request.files.add(await http.MultipartFile.fromPath('playback_file', playbackPath, filename: 'playback.mp4'));
     try {
       final response = await request.send();
       final body = await http.Response.fromStream(response);
-      if (body.statusCode != 200 && body.statusCode != 201) {
-        throw Exception('Video upload failed: ${body.statusCode} ${body.body}');
-      }
+      if (body.statusCode != 200 && body.statusCode != 201) throw Exception('Video upload failed: ${body.statusCode} ${body.body}');
       return Photo.fromJson(jsonDecode(body.body));
     } finally {
-      try {
-        await playbackFile.delete();
-      } catch (_) {}
+      try { await playbackFile.delete(); } catch (_) {}
     }
   }
 
   Future<List<int>> downloadPhoto(int photoId) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/photos/$photoId'),
-      headers: {'Authorization': 'Bearer ${token ?? ''}'},
-    );
+    final response = await http.get(Uri.parse('$baseUrl/photos/$photoId'), headers: {'Authorization': 'Bearer ${token ?? ''}'});
     if (response.statusCode != 200) throw Exception('Failed to download media: ${response.statusCode}');
     return response.bodyBytes;
   }
@@ -163,7 +121,6 @@ class ApiService {
     request.headers['Authorization'] = 'Bearer ${token ?? ''}';
     final response = await http.Client().send(request);
     if (response.statusCode != 200) throw Exception('Failed to download media: ${response.statusCode}');
-
     final directory = await getTemporaryDirectory();
     final safeName = filename.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
     final file = File('${directory.path}/$safeName');
