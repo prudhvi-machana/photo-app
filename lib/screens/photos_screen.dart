@@ -1,8 +1,14 @@
-import 'package:flutter/material.dart';
+import 'dart:math' as math;
 
+import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
+
+import '../models/local_media.dart';
 import '../models/photo.dart';
 import '../services/api_service.dart';
 import '../widgets/photo_thumbnail.dart';
+import 'local_media_viewer_screen.dart';
 import 'photo_viewer_screen.dart';
 import 'trash_screen.dart';
 import 'upload_photos_screen.dart';
@@ -18,31 +24,79 @@ class PhotosScreen extends StatefulWidget {
 
 class _PhotosScreenState extends State<PhotosScreen> {
   final ApiService _apiService = ApiService();
-  List<Photo> _photos = [];
+
+  List<Photo> _cloudPhotos = [];
+  List<LocalMedia> _localMedia = [];
   bool _isLoading = true;
+  bool _hasLocalPermission = false;
   String? _errorMessage;
 
   int _crossAxisCount = 3;
-  double _scaleAtStart = 1.0;
+  final Map<int, Offset> _pointers = {};
+  double? _pinchStartDistance;
+  int _pinchStartColumns = 3;
   bool _isPinching = false;
 
   @override
   void initState() {
     super.initState();
     _apiService.setToken(widget.token);
-    _loadPhotos();
+    _loadMedia();
   }
 
-  Future<void> _loadPhotos() async {
+  Future<void> _loadMedia() async {
     try {
-      final photos = await _apiService.getPhotos();
+      final cloudFuture = _apiService.getPhotos();
+      final permission = await PhotoManager.requestPermissionExtend();
+      List<LocalMedia> local = [];
+
+      if (permission.hasAccess) {
+        final assets = await PhotoManager.getAssetListRange(
+          start: 0,
+          end: 500,
+          type: RequestType.common,
+        );
+        local = [
+          for (final asset in assets)
+            if (!asset.isTrashed)
+              LocalMedia(
+                asset: asset,
+                filename: await asset.titleAsync,
+              ),
+        ];
+      }
+
+      final cloud = await cloudFuture;
+      final localNames = <String>{
+        for (final item in local) item.filename.trim().toLowerCase(),
+      };
+
+      // Existing server records currently expose the original filename but
+      // not a device-side content hash. Filename matching is therefore a
+      // conservative first-pass indicator for "both"; exact hash matching
+      // can be added later without changing the UI model.
+      local = [
+        for (final item in local)
+          LocalMedia(
+            asset: item.asset,
+            filename: item.filename,
+            alsoInCloud: cloud.any(
+              (photo) =>
+                  photo.originalFilename.trim().toLowerCase() ==
+                  item.filename.trim().toLowerCase(),
+            ),
+          ),
+      ];
+
       if (!mounted) return;
       setState(() {
-        _photos = photos;
+        _cloudPhotos = cloud;
+        _localMedia = local;
+        _hasLocalPermission = permission.hasAccess;
         _isLoading = false;
         _errorMessage = null;
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
@@ -51,35 +105,91 @@ class _PhotosScreenState extends State<PhotosScreen> {
     }
   }
 
-  Future<void> _refresh() async => _loadPhotos();
+  Future<void> _refresh() async => _loadMedia();
 
-  void _onScaleStart(ScaleStartDetails details) {
-    // Only a genuine two-or-more-finger gesture is considered a grid zoom.
-    // This keeps normal one-finger scrolling completely independent.
-    if (details.pointerCount < 2) return;
-    _scaleAtStart = _crossAxisCount.toDouble();
-    setState(() => _isPinching = true);
+  void _pointerDown(PointerDownEvent event) {
+    _pointers[event.pointer] = event.position;
+    if (_pointers.length == 2) {
+      _pinchStartDistance = _distanceBetweenPointers();
+      _pinchStartColumns = _crossAxisCount;
+      setState(() => _isPinching = true);
+    }
   }
 
-  void _onScaleUpdate(ScaleUpdateDetails details) {
-    if (!_isPinching || details.pointerCount < 2) return;
+  void _pointerMove(PointerMoveEvent event) {
+    if (!_pointers.containsKey(event.pointer)) return;
+    _pointers[event.pointer] = event.position;
+    if (!_isPinching || _pointers.length < 2 || _pinchStartDistance == null) return;
 
-    final next = (_scaleAtStart / details.scale).round().clamp(2, 6);
+    final currentDistance = _distanceBetweenPointers();
+    if (currentDistance <= 0) return;
+
+    // Finger separation is used directly instead of Flutter's generic scale
+    // recognizer. This keeps the grid scroll and RefreshIndicator out of the
+    // pinch gesture arena.
+    final ratio = _pinchStartDistance! / currentDistance;
+    final next = (_pinchStartColumns * ratio).round().clamp(2, 6);
     if (next != _crossAxisCount) {
       setState(() => _crossAxisCount = next);
     }
   }
 
-  void _onScaleEnd(ScaleEndDetails details) {
-    if (_isPinching) setState(() => _isPinching = false);
+  void _pointerUp(PointerEvent event) {
+    _pointers.remove(event.pointer);
+    if (_pointers.length < 2 && _isPinching) {
+      _pinchStartDistance = null;
+      setState(() => _isPinching = false);
+    }
   }
 
-  Map<DateTime, List<Photo>> _groupPhotosByDate() {
-    final groups = <DateTime, List<Photo>>{};
-    for (final photo in _photos) {
-      final date = DateTime.parse(photo.uploadedAt).toLocal();
-      final key = DateTime(date.year, date.month, date.day);
-      groups.putIfAbsent(key, () => []).add(photo);
+  double _distanceBetweenPointers() {
+    if (_pointers.length < 2) return 0;
+    final values = _pointers.values.toList();
+    final dx = values[0].dx - values[1].dx;
+    final dy = values[0].dy - values[1].dy;
+    return math.sqrt(dx * dx + dy * dy);
+  }
+
+  Map<DateTime, List<_MediaItem>> _groupMediaByDate() {
+    final items = <_MediaItem>[];
+
+    final localNames = <String>{
+      for (final item in _localMedia) item.filename.trim().toLowerCase(),
+    };
+
+    for (final photo in _cloudPhotos) {
+      final localExists = localNames.contains(
+        photo.originalFilename.trim().toLowerCase(),
+      );
+      items.add(_MediaItem.cloud(photo, alsoLocal: localExists));
+    }
+
+    // Don't render a second tile for a local asset whose filename matches a
+    // cloud record. The local tile represents the same media and carries a
+    // combined local+cloud badge.
+    final cloudNames = {
+      for (final photo in _cloudPhotos)
+        photo.originalFilename.trim().toLowerCase(),
+    };
+    for (final local in _localMedia) {
+      if (!cloudNames.contains(local.filename.trim().toLowerCase())) {
+        items.add(_MediaItem.local(local));
+      } else {
+        items.add(_MediaItem.local(local.copyWith(alsoInCloud: true)));
+        items.removeWhere((item) =>
+            item.isCloud &&
+            item.cloud!.originalFilename.trim().toLowerCase() ==
+                local.filename.trim().toLowerCase());
+      }
+    }
+
+    items.sort((a, b) => b.date.compareTo(a.date));
+
+    final groups = <DateTime, List<_MediaItem>>{};
+    for (final item in items) {
+      final d = item.date;
+      final key = DateTime(d.year, d.month, d.day);
+      groups.putIfAbsent(key, () => []).add(item);
     }
     return groups;
   }
@@ -99,13 +209,20 @@ class _PhotosScreenState extends State<PhotosScreen> {
     return '${months[date.month - 1]} ${date.day}, ${date.year}';
   }
 
-  void _openPhoto(int index) {
+  void _openCloudPhoto(Photo photo) {
+    final index = _cloudPhotos.indexOf(photo);
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PhotoViewerScreen(
-        photos: _photos,
+        photos: _cloudPhotos,
         initialIndex: index,
         token: widget.token,
       ),
+    ));
+  }
+
+  void _openLocalPhoto(LocalMedia media) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => LocalMediaViewerScreen(asset: media.asset),
     ));
   }
 
@@ -129,6 +246,11 @@ class _PhotosScreenState extends State<PhotosScreen> {
       appBar: AppBar(
         title: const Text('Photos'),
         actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh),
+            onPressed: _refresh,
+          ),
           IconButton(
             tooltip: 'Trash',
             icon: const Icon(Icons.delete_outline),
@@ -155,44 +277,44 @@ class _PhotosScreenState extends State<PhotosScreen> {
           children: [
             Text(_errorMessage!),
             const SizedBox(height: 16),
-            FilledButton(onPressed: _loadPhotos, child: const Text('Retry')),
+            FilledButton(onPressed: _loadMedia, child: const Text('Retry')),
           ],
         ),
       );
     }
 
-    if (_photos.isEmpty) {
-      return RefreshIndicator(
-        onRefresh: _refresh,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
-            SizedBox(height: 220),
-            Center(child: Text('No photos yet.')),
-          ],
-        ),
-      );
+    if (!_hasLocalPermission && _cloudPhotos.isEmpty) {
+      return const Center(child: Text('Allow photo access to see your device media.'));
     }
 
-    final groups = _groupPhotosByDate();
+    final groups = _groupMediaByDate();
     final dates = groups.keys.toList()..sort((a, b) => b.compareTo(a));
 
-    // During a two-finger gesture we temporarily remove scroll physics.
-    // This prevents RefreshIndicator/scrolling from stealing a pinch gesture.
-    final physics = _isPinching
+    final scrollPhysics = _isPinching
         ? const NeverScrollableScrollPhysics()
         : const AlwaysScrollableScrollPhysics();
 
-    return GestureDetector(
+    return Listener(
       behavior: HitTestBehavior.translucent,
-      onScaleStart: _onScaleStart,
-      onScaleUpdate: _onScaleUpdate,
-      onScaleEnd: _onScaleEnd,
+      onPointerDown: _pointerDown,
+      onPointerMove: _pointerMove,
+      onPointerUp: _pointerUp,
+      onPointerCancel: _pointerUp,
       child: RefreshIndicator(
         onRefresh: _refresh,
         child: CustomScrollView(
-          physics: physics,
+          physics: scrollPhysics,
           slivers: [
+            if (!_hasLocalPermission)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                  child: Text(
+                    'Device photos are hidden until photo access is allowed.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
             for (final date in dates) ...[
               SliverToBoxAdapter(
                 child: Padding(
@@ -210,12 +332,8 @@ class _PhotosScreenState extends State<PhotosScreen> {
                 sliver: SliverGrid(
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
-                      final photo = groups[date]![index];
-                      final globalIndex = _photos.indexOf(photo);
-                      return GestureDetector(
-                        onTap: () => _openPhoto(globalIndex),
-                        child: PhotoThumbnail(photo: photo, token: widget.token),
-                      );
+                      final item = groups[date]![index];
+                      return _buildMediaTile(item);
                     },
                     childCount: groups[date]!.length,
                   ),
@@ -234,4 +352,99 @@ class _PhotosScreenState extends State<PhotosScreen> {
       ),
     );
   }
+
+  Widget _buildMediaTile(_MediaItem item) {
+    if (item.isCloud) {
+      return GestureDetector(
+        onTap: () => _openCloudPhoto(item.cloud!),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            PhotoThumbnail(photo: item.cloud!, token: widget.token),
+            _buildStatusBadge(local: item.alsoLocal, cloud: true),
+          ],
+        ),
+      );
+    }
+
+    final local = item.local!;
+    return GestureDetector(
+      onTap: () => _openLocalPhoto(local),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          AssetEntityImage(
+            local.asset,
+            isOriginal: false,
+            thumbnailSize: const ThumbnailSize.square(300),
+            thumbnailFormat: ThumbnailFormat.jpeg,
+            fit: BoxFit.cover,
+          ),
+          _buildStatusBadge(local: true, cloud: local.alsoInCloud),
+          if (local.isVideo)
+            const Positioned(
+              right: 8,
+              bottom: 8,
+              child: Icon(Icons.play_circle_fill, color: Colors.white, size: 28),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusBadge({required bool local, required bool cloud}) {
+    final icon = local && cloud
+        ? Icons.cloud_done
+        : cloud
+            ? Icons.cloud_done
+            : Icons.smartphone;
+    final label = local && cloud
+        ? 'On device + cloud'
+        : cloud
+            ? 'Cloud'
+            : 'On device';
+
+    return Positioned(
+      top: 5,
+      right: 5,
+      child: Tooltip(
+        message: label,
+        child: Container(
+          padding: const EdgeInsets.all(5),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.62),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: Colors.white, size: 16),
+        ),
+      ),
+    );
+  }
+}
+
+class _MediaItem {
+  final Photo? cloud;
+  final LocalMedia? local;
+  final bool alsoLocal;
+
+  const _MediaItem._({this.cloud, this.local, this.alsoLocal});
+
+  factory _MediaItem.cloud(Photo photo, {required bool alsoLocal}) =>
+      _MediaItem._(cloud: photo, alsoLocal: alsoLocal);
+
+  factory _MediaItem.local(LocalMedia media) =>
+      _MediaItem._(local: media);
+
+  bool get isCloud => cloud != null;
+  DateTime get date => isCloud
+      ? DateTime.parse(cloud!.uploadedAt).toLocal()
+      : local!.createdAt;
+}
+
+extension on LocalMedia {
+  LocalMedia copyWith({bool? alsoInCloud}) => LocalMedia(
+        asset: asset,
+        filename: filename,
+        alsoInCloud: alsoInCloud ?? this.alsoInCloud,
+      );
 }
