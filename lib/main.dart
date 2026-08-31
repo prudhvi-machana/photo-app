@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'screens/albums_screen.dart';
+import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_service.dart';
 import 'services/auth_service.dart';
@@ -21,9 +21,7 @@ class PhotoStorageApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Photo Storage',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blue,
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
       home: const StartupScreen(),
@@ -63,9 +61,7 @@ class _StartupScreenState extends State<StartupScreen> {
       if (!mounted) return;
 
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => AlbumsScreen(token: token),
-        ),
+        MaterialPageRoute(builder: (_) => HomeScreen(token: token)),
       );
     } catch (_) {
       await _authService.logout();
@@ -77,18 +73,14 @@ class _StartupScreenState extends State<StartupScreen> {
     if (!mounted) return;
 
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => const LoginScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
-      body: Center(
-        child: CircularProgressIndicator(),
-      ),
+      body: Center(child: CircularProgressIndicator()),
     );
   }
 }
