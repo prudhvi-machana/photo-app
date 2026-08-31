@@ -16,6 +16,8 @@ dependencies:
   path_provider: ^2.1.6
   video_player: ^2.14.0
   background_downloader: ^9.5.8
+  photo_manager: ^3.12.0
+  photo_manager_image_provider: ^2.2.0
 
 dev_dependencies:
   flutter_test:
