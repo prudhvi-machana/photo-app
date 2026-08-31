@@ -22,9 +22,9 @@ class _PhotosScreenState extends State<PhotosScreen> {
   bool _isLoading = true;
   String? _errorMessage;
 
-  // 2 columns = larger thumbnails, 6 = smaller thumbnails.
   int _crossAxisCount = 3;
   double _scaleAtStart = 1.0;
+  bool _isPinching = false;
 
   @override
   void initState() {
@@ -54,16 +54,24 @@ class _PhotosScreenState extends State<PhotosScreen> {
   Future<void> _refresh() async => _loadPhotos();
 
   void _onScaleStart(ScaleStartDetails details) {
+    // Only a genuine two-or-more-finger gesture is considered a grid zoom.
+    // This keeps normal one-finger scrolling completely independent.
+    if (details.pointerCount < 2) return;
     _scaleAtStart = _crossAxisCount.toDouble();
+    setState(() => _isPinching = true);
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    // Pinch out (scale > 1) makes thumbnails larger -> fewer columns.
-    // Pinch in (scale < 1) makes thumbnails smaller -> more columns.
+    if (!_isPinching || details.pointerCount < 2) return;
+
     final next = (_scaleAtStart / details.scale).round().clamp(2, 6);
     if (next != _crossAxisCount) {
       setState(() => _crossAxisCount = next);
     }
+  }
+
+  void _onScaleEnd(ScaleEndDetails details) {
+    if (_isPinching) setState(() => _isPinching = false);
   }
 
   Map<DateTime, List<Photo>> _groupPhotosByDate() {
@@ -169,14 +177,21 @@ class _PhotosScreenState extends State<PhotosScreen> {
     final groups = _groupPhotosByDate();
     final dates = groups.keys.toList()..sort((a, b) => b.compareTo(a));
 
+    // During a two-finger gesture we temporarily remove scroll physics.
+    // This prevents RefreshIndicator/scrolling from stealing a pinch gesture.
+    final physics = _isPinching
+        ? const NeverScrollableScrollPhysics()
+        : const AlwaysScrollableScrollPhysics();
+
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onScaleStart: _onScaleStart,
       onScaleUpdate: _onScaleUpdate,
+      onScaleEnd: _onScaleEnd,
       child: RefreshIndicator(
         onRefresh: _refresh,
         child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
+          physics: physics,
           slivers: [
             for (final date in dates) ...[
               SliverToBoxAdapter(
