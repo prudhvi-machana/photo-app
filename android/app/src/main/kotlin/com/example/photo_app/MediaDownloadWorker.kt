@@ -4,7 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
-import android.content.ServiceInfo
+import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
