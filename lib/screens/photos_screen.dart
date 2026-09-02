@@ -261,6 +261,16 @@ class _PhotosScreenState extends State<PhotosScreen>{
     final viewport=_pinchViewport();
     final anchor=_captureAnchorAtViewport(viewport);
     final version=++_pinchAnchorVersion;
+
+    // Move the old grid to the predicted new position before the new layout
+    // is painted. The rendered-widget correction below then removes any
+    // remaining sub-pixel/layout difference without a visible date flash.
+    if(_scrollController.hasClients&&anchor.date!=null){
+      final predictedContentOffset=_contentOffsetForAnchor(anchor,next);
+      final predictedTarget=(predictedContentOffset-viewport.dy).clamp(0.0,_scrollController.position.maxScrollExtent).toDouble();
+      if((predictedTarget-_scrollController.offset).abs()>.1)_scrollController.jumpTo(predictedTarget);
+    }
+
     setState(()=>_crossAxisCount=next);
     _schedulePinchCorrection(anchor,next,version);
   }
@@ -315,7 +325,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
         IconButton(tooltip:'Trash',icon:const Icon(Icons.delete_outline),onPressed:_openTrash)
       ]
     ),
-    floatingActionButton:_isSelectionMode?null:FloatingActionButton(onPressed:_openUploadPhotos,child:const Icon(Icons.add)),
+    floatingActionButton:_isSelectionMode?null:FloatingActionButton(heroTag:'photos_upload_fab',onPressed:_openUploadPhotos,child:const Icon(Icons.add)),
     body:_buildBody()
   );
 
