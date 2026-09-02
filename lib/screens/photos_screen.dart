@@ -129,7 +129,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
   Future<void> _refresh()async=>_loadMedia();
 
   _Anchor _captureAnchor(){
-    if(!_scrollController.hasClients)return const _Anchor(null,0,0);
+    if(!_scrollController.hasClients)return const _Anchor(null,0,0,false);
     final offset=_scrollController.offset;
     final width=MediaQuery.sizeOf(context).width;
     final tile=(width-4-2*(_crossAxisCount-1))/_crossAxisCount;
@@ -142,16 +142,16 @@ class _PhotosScreenState extends State<PhotosScreen>{
       if(offset<cursor+groupHeight){
         final groupOffset=(offset-cursor).clamp(0.0,groupHeight);
         if(groupOffset<_headerExtent||list.isEmpty){
-          return _Anchor(date,0,groupOffset);
+          return _Anchor(date,0,groupOffset,true);
         }
         final inside=groupOffset-_headerExtent;
         final row=(inside/(tile+2)).floor().clamp(0,math.max(0,rows-1));
         final item=(row*_crossAxisCount).clamp(0,math.max(0,list.length-1));
-        return _Anchor(date,item,inside-row*(tile+2));
+        return _Anchor(date,item,inside-row*(tile+2),false);
       }
       cursor+=groupHeight;
     }
-    return const _Anchor(null,0,0);
+    return const _Anchor(null,0,0,false);
   }
 
   double _offsetForAnchor(_Anchor anchor,int columns){
@@ -164,6 +164,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
       final rows=(list.length/columns).ceil();
       final groupHeight=_headerExtent+rows*tile+(rows>0?math.max(0,rows-1)*2:0);
       if(anchor.date==date){
+        if(anchor.inHeader)return cursor+anchor.inTileOffset.clamp(0.0,_headerExtent);
         if(list.isEmpty)return cursor;
         final local=anchor.localIndex.clamp(0,list.length-1);
         final row=local~/columns;
@@ -226,6 +227,7 @@ class _Anchor{
   final DateTime? date;
   final int localIndex;
   final double inTileOffset;
-  const _Anchor(this.date,this.localIndex,this.inTileOffset);
+  final bool inHeader;
+  const _Anchor(this.date,this.localIndex,this.inTileOffset,this.inHeader);
 }
 class _MediaItem{final Photo? cloud;final LocalMedia? local;final bool alsoLocal;const _MediaItem._({this.cloud,this.local,this.alsoLocal=false});factory _MediaItem.cloud(Photo p,{required bool alsoLocal})=>_MediaItem._(cloud:p,alsoLocal:alsoLocal);factory _MediaItem.local(LocalMedia m)=>_MediaItem._(local:m);bool get isCloud=>cloud!=null;DateTime get date=>isCloud?DateTime.parse(cloud!.uploadedAt).toLocal():local!.createdAt;}
