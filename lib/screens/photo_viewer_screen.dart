@@ -52,7 +52,8 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
   late final PageController _pageController;
   late final List<_ViewerItem> _items;
   final ApiService _apiService = ApiService();
-  final Set<String> _favoriteIds = {};
+  final Set<int> _favoriteCloudIds = {};
+  final Set<String> _favoriteLocalIds = {};
 
   int _currentIndex = 0;
   bool _isInteractingWithImage = false;
@@ -121,26 +122,70 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
 
   _ViewerItem get _currentItem => _items[_currentIndex];
 
-  bool get _currentIsFavorite => _favoriteIds.contains(_currentItem.identity);
+  bool get _currentIsFavorite {
+    final item = _currentItem;
+    if (item.isCloud) return _favoriteCloudIds.contains(item.cloud!.id);
+    return _favoriteLocalIds.contains(item.local!.asset.id);
+  }
 
   Future<void> _loadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getStringList('favorite_media_ids') ?? const [];
+
     if (!mounted) return;
-    setState(() => _favoriteIds.addAll(saved));
+    setState(() {
+      _favoriteLocalIds.addAll(
+        saved.where((id) => id.startsWith('local:')).map((id) => id.substring(6)),
+      );
+      _favoriteCloudIds.addAll(
+        widget.photos
+            .where((photo) => photo.isFavorite)
+            .map((photo) => photo.id),
+      );
+    });
   }
 
   Future<void> _toggleFavorite() async {
-    final id = _currentItem.identity;
+    final item = _currentItem;
+
+    if (item.isCloud) {
+      final photo = item.cloud!;
+      final currentlyFavorite = _favoriteCloudIds.contains(photo.id);
+      if (_isActionRunning) return;
+
+      setState(() => _isActionRunning = true);
+      try {
+        await _apiService.setFavorite(photo.id, !currentlyFavorite);
+        if (!mounted) return;
+        setState(() {
+          if (currentlyFavorite) {
+            _favoriteCloudIds.remove(photo.id);
+          } else {
+            _favoriteCloudIds.add(photo.id);
+          }
+          _isActionRunning = false;
+        });
+      } catch (error) {
+        if (!mounted) return;
+        setState(() => _isActionRunning = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not update favourite: $error')),
+        );
+      }
+      return;
+    }
+
+    final id = item.local!.asset.id;
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      if (_favoriteIds.contains(id)) {
-        _favoriteIds.remove(id);
+      if (_favoriteLocalIds.contains(id)) {
+        _favoriteLocalIds.remove(id);
       } else {
-        _favoriteIds.add(id);
+        _favoriteLocalIds.add(id);
       }
     });
-    await prefs.setStringList('favorite_media_ids', _favoriteIds.toList());
+    final saved = _favoriteLocalIds.map((value) => 'local:$value').toList();
+    await prefs.setStringList('favorite_media_ids', saved);
   }
 
   Future<void> _downloadCurrent() async {
@@ -492,12 +537,13 @@ class _DetailRow extends StatelessWidget {
             width: 92,
             child: Text(
               label,
-              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
             ),
           ),
-          Expanded(
-            child: Text(value, maxLines: 4, overflow: TextOverflow.ellipsis),
-          ),
+          const SizedBox(width: 12),
+          Expanded(child: Text(value)),
         ],
       ),
     );
@@ -507,8 +553,8 @@ class _DetailRow extends StatelessWidget {
 class _ImageViewer extends StatelessWidget {
   final _ViewerItem item;
   final String token;
-  final ValueChanged<ScaleStartDetails> onInteractionStart;
-  final ValueChanged<ScaleEndDetails> onInteractionEnd;
+  final GestureScaleStartCallback? onInteractionStart;
+  final GestureScaleEndCallback? onInteractionEnd;
 
   const _ImageViewer({
     required this.item,
@@ -519,38 +565,46 @@ class _ImageViewer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Widget image = item.isCloud
-        ? Image.network(
-            '${ApiConfig.baseUrl}/photos/${item.cloud!.id}',
+    if (!item.isCloud) {
+      return GestureDetector(
+        onScaleStart: onInteractionStart,
+        onScaleEnd: onInteractionEnd,
+        child: InteractiveViewer(
+          minScale: 1,
+          maxScale: 5,
+          child: Center(
+            child: AssetEntityImage(
+              item.local!.asset,
+              isOriginal: false,
+              fit: BoxFit.contain,
+            ),
+          ),
+        ),
+      );
+    }
+
+    final photo = item.cloud!;
+    final apiUrl = '${ApiConfig.baseUrl}/photos/${photo.id}';
+    return GestureDetector(
+      onScaleStart: onInteractionStart,
+      onScaleEnd: onInteractionEnd,
+      child: InteractiveViewer(
+        minScale: 1,
+        maxScale: 5,
+        child: Center(
+          child: Image.network(
+            apiUrl,
             headers: {'Authorization': 'Bearer $token'},
             fit: BoxFit.contain,
-            loadingBuilder: (context, child, progress) => progress == null
-                ? child
-                : const CircularProgressIndicator(color: Colors.white),
-            errorBuilder: (context, error, stackTrace) =>
-                const Icon(Icons.broken_image, color: Colors.white, size: 60),
-          )
-        : AssetEntityImage(
-            item.local!.asset,
-            isOriginal: true,
-            fit: BoxFit.contain,
-            thumbnailSize: ThumbnailSize(
-              item.local!.asset.width,
-              item.local!.asset.height,
+            errorBuilder: (context, error, stackTrace) => const Center(
+              child: Icon(Icons.broken_image_outlined, color: Colors.white54, size: 56),
             ),
-            thumbnailFormat: ThumbnailFormat.jpeg,
-          );
-
-    return Center(
-      child: InteractiveViewer(
-        minScale: 1.0,
-        maxScale: 5.0,
-        boundaryMargin: const EdgeInsets.all(24),
-        panEnabled: true,
-        scaleEnabled: true,
-        onInteractionStart: onInteractionStart,
-        onInteractionEnd: onInteractionEnd,
-        child: image,
+            loadingBuilder: (context, child, progress) {
+              if (progress == null) return child;
+              return const Center(child: CircularProgressIndicator());
+            },
+          ),
+        ),
       ),
     );
   }
@@ -567,339 +621,158 @@ class _VideoViewer extends StatefulWidget {
 }
 
 class _VideoViewerState extends State<_VideoViewer> {
-  VideoPlayerController? _controller;
-  bool _initialized = false;
-  Object? _error;
-  bool _showControls = true;
-  bool _isFullscreen = false;
-  double _playbackSpeed = 1.0;
-
-  bool get _isCloud => widget.item.isCloud;
+  late final VideoPlayerController _controller;
+  Future<void>? _initializeFuture;
+  double _speed = 1.0;
 
   @override
   void initState() {
     super.initState();
-    _initialize();
-  }
-
-  Future<void> _initialize() async {
-    try {
-      late final VideoPlayerController controller;
-
-      if (_isCloud) {
-        final photo = widget.item.cloud!;
-        String playbackUrl() {
-          if (photo.playbackStatus == 'ready' && photo.playbackUrl != null) {
-            final path = photo.playbackUrl!;
-            return path.startsWith('http') ? path : '${ApiConfig.baseUrl}$path';
-          }
-          return '${ApiConfig.baseUrl}/photos/${photo.id}';
+    if (widget.item.isCloud) {
+      _controller = VideoPlayerController.networkUrl(
+        Uri.parse('${ApiConfig.baseUrl}/photos/${widget.item.cloud!.id}'),
+        httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
+      );
+    } else {
+      final fileFuture = widget.item.local!.asset.file;
+      _initializeFuture = fileFuture.then((file) {
+        if (file == null) {
+          throw Exception('Unable to access video file');
         }
-
-        controller = VideoPlayerController.networkUrl(
-          Uri.parse(playbackUrl()),
-          httpHeaders: {
-            'Authorization': 'Bearer ${widget.token}',
-            'Accept': 'video/*',
-          },
-        );
-      } else {
-        final file = await widget.item.local!.asset.file;
-        if (file == null) throw Exception('Unable to access video file.');
-        controller = VideoPlayerController.file(file);
-      }
-
-      _controller = controller;
-      controller.addListener(_videoListener);
-      await controller.initialize();
-      if (!mounted) {
-        await controller.dispose();
-        return;
-      }
-      setState(() => _initialized = true);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _error = error);
+        _controller = VideoPlayerController.file(file);
+        return _controller.initialize();
+      });
     }
-  }
-
-  void _videoListener() {
-    if (mounted) setState(() {});
-  }
-
-  void _togglePlayPause() {
-    final controller = _controller;
-    if (controller == null) return;
-    if (controller.value.isPlaying) {
-      controller.pause();
-    } else {
-      controller.play();
+    if (widget.item.isCloud) {
+      _initializeFuture = _controller.initialize();
     }
-  }
-
-  Future<void> _seekBy(Duration offset) async {
-    final controller = _controller;
-    if (controller == null) return;
-    final value = controller.value;
-    var target = value.position + offset;
-    if (target < Duration.zero) target = Duration.zero;
-    if (target > value.duration) target = value.duration;
-    await controller.seekTo(target);
-  }
-
-  String _formatDuration(Duration duration) {
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return hours > 0
-        ? '$hours:$minutes:$seconds'
-        : '${duration.inMinutes.toString().padLeft(2, '0')}:$seconds';
-  }
-
-  Future<void> _setFullscreen(bool enabled) async {
-    if (enabled) {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      await SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    } else {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      await SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
-    }
-    if (mounted) setState(() => _isFullscreen = enabled);
   }
 
   @override
   void dispose() {
-    final controller = _controller;
-    controller?.removeListener(_videoListener);
-    controller?.dispose();
-    if (_isFullscreen) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
-    }
+    _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _seekRelative(int seconds) async {
+    final position = await _controller.position;
+    final duration = _controller.value.duration;
+    if (position == null) return;
+    final target = position + Duration(seconds: seconds);
+    final clamped = target < Duration.zero
+        ? Duration.zero
+        : target > duration
+            ? duration
+            : target;
+    await _controller.seekTo(clamped);
+  }
+
+  Future<void> _selectSpeed() async {
+    final speed = await showModalBottomSheet<double>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final value in [0.5, 1.0, 1.5, 2.0])
+              ListTile(
+                title: Text('${value}x'),
+                trailing: _speed == value ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.pop(context, value),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (speed == null) return;
+    setState(() => _speed = speed);
+    await _controller.setPlaybackSpeed(speed);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_error != null) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    return FutureBuilder<void>(
+      future: _initializeFuture,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(
+            child: Text(
+              'Unable to play video.',
+              style: TextStyle(color: Colors.white),
+            ),
+          );
+        }
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final controller = _controller;
+        return Column(
           children: [
-            Icon(Icons.error_outline, color: Colors.white, size: 60),
-            SizedBox(height: 12),
-            Text('Unable to play this video.', style: TextStyle(color: Colors.white)),
-          ],
-        ),
-      );
-    }
-
-    final controller = _controller;
-    if (!_initialized || controller == null) {
-      return const Center(child: CircularProgressIndicator(color: Colors.white));
-    }
-
-    final value = controller.value;
-    final duration = value.duration;
-    final position = value.position > duration ? duration : value.position;
-    final isEnded = duration > Duration.zero && position >= duration;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => setState(() => _showControls = !_showControls),
-      onDoubleTap: _togglePlayPause,
-      child: Center(
-        child: AspectRatio(
-          aspectRatio: value.aspectRatio,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              VideoPlayer(controller),
-              IgnorePointer(
-                ignoring: !_showControls,
-                child: AnimatedOpacity(
-                  opacity: _showControls ? 1 : 0,
-                  duration: const Duration(milliseconds: 180),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.black.withValues(alpha: 0.55),
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.75),
-                        ],
-                        stops: const [0, 0.48, 1],
-                      ),
-                    ),
-                    child: Stack(
-                      children: [
-                        Center(
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _ControlButton(
-                                icon: Icons.replay_10,
-                                onPressed: () => _seekBy(const Duration(seconds: -10)),
-                              ),
-                              const SizedBox(width: 28),
-                              _ControlButton(
-                                icon: isEnded
-                                    ? Icons.replay
-                                    : value.isPlaying
-                                        ? Icons.pause
-                                        : Icons.play_arrow,
-                                size: 64,
-                                iconSize: 38,
-                                onPressed: () {
-                                  if (isEnded) {
-                                    controller.seekTo(Duration.zero);
-                                    controller.play();
-                                  } else {
-                                    _togglePlayPause();
-                                  }
-                                },
-                              ),
-                              const SizedBox(width: 28),
-                              _ControlButton(
-                                icon: Icons.forward_10,
-                                onPressed: () => _seekBy(const Duration(seconds: 10)),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Positioned(
-                          left: 14,
-                          right: 14,
-                          bottom: 8,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Row(
-                                children: [
-                                  Text(
-                                    _formatDuration(position),
-                                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                                  ),
-                                  const Spacer(),
-                                  Text(
-                                    _formatDuration(duration),
-                                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(
-                                height: 28,
-                                child: VideoProgressIndicator(
-                                  controller,
-                                  allowScrubbing: true,
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
-                                  colors: const VideoProgressColors(
-                                    playedColor: Colors.white,
-                                    bufferedColor: Colors.white54,
-                                    backgroundColor: Colors.white30,
-                                  ),
-                                ),
-                              ),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  PopupMenuButton<double>(
-                                    initialValue: _playbackSpeed,
-                                    color: const Color(0xFF202124),
-                                    onSelected: (speed) {
-                                      setState(() => _playbackSpeed = speed);
-                                      controller.setPlaybackSpeed(speed);
-                                    },
-                                    itemBuilder: (context) => [
-                                      for (final speed in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0])
-                                        PopupMenuItem(
-                                          value: speed,
-                                          child: Text(
-                                            '${speed}x',
-                                            style: const TextStyle(color: Colors.white),
-                                          ),
-                                        ),
-                                    ],
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(8),
-                                      child: Text(
-                                        '${_playbackSpeed}x',
-                                        style: const TextStyle(color: Colors.white, fontSize: 13),
-                                      ),
-                                    ),
-                                  ),
-                                  IconButton(
-                                    onPressed: () => _setFullscreen(!_isFullscreen),
-                                    icon: Icon(
-                                      _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (value.isBuffering)
-                          const Center(
-                            child: SizedBox(
-                              width: 34,
-                              height: 34,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 3,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
+            Expanded(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio,
+                  child: VideoPlayer(controller),
                 ),
               ),
-            ],
-          ),
-        ),
-      ),
+            ),
+            ValueListenableBuilder<VideoPlayerValue>(
+              valueListenable: controller,
+              builder: (context, value, child) {
+                return Column(
+                  children: [
+                    VideoProgressIndicator(
+                      controller,
+                      allowScrubbing: true,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            onPressed: () => _seekRelative(-10),
+                            icon: const Icon(Icons.replay_10, color: Colors.white),
+                          ),
+                          IconButton(
+                            onPressed: () async {
+                              if (value.isPlaying) {
+                                await controller.pause();
+                              } else {
+                                await controller.play();
+                              }
+                              if (mounted) setState(() {});
+                            },
+                            icon: Icon(
+                              value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                              color: Colors.white,
+                              size: 38,
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => _seekRelative(10),
+                            icon: const Icon(Icons.forward_10, color: Colors.white),
+                          ),
+                          const SizedBox(width: 10),
+                          TextButton(
+                            onPressed: _selectSpeed,
+                            child: Text(
+                              '${_speed}x',
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        );
+      },
     );
   }
-}
-
-class _ControlButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onPressed;
-  final double size;
-  final double iconSize;
-
-  const _ControlButton({
-    required this.icon,
-    required this.onPressed,
-    this.size = 50,
-    this.iconSize = 30,
-  });
-
-  @override
-  Widget build(BuildContext context) => Material(
-        color: Colors.black.withValues(alpha: 0.42),
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onPressed,
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: Icon(icon, color: Colors.white, size: iconSize),
-          ),
-        ),
-      );
 }
