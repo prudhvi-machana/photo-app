@@ -114,46 +114,65 @@ class _PhotosScreenState extends State<PhotosScreen>{
   }
   Future<void> _refresh()async=>_loadMedia();
 
-  _Anchor _captureAnchorAtViewport(double viewportY){
-    if(!_scrollController.hasClients)return const _Anchor(null,0);
-    final contentY=_scrollController.offset+viewportY;
+  _Anchor _captureAnchorAtViewport(Offset viewport){
+    if(!_scrollController.hasClients)return const _Anchor(null,null,0);
+    final contentY=_scrollController.offset+viewport.dy;
     final width=MediaQuery.sizeOf(context).width;
     final tile=(width-4-2*(_crossAxisCount-1))/_crossAxisCount;
+    const spacing=2.0;
     var cursor=0.0;
     final dates=_mediaGroups.keys.toList()..sort((a,b)=>b.compareTo(a));
     for(final date in dates){
       final list=_mediaGroups[date]!;
+      final groupStart=cursor;
+      final gridY=contentY-groupStart-_headerExtent;
+      if(gridY<=0){
+        if(list.isNotEmpty)return _Anchor(_keyFor(list.first),date,0);
+        return _Anchor(null,date,0);
+      }
+      final rowHeight=tile+spacing;
+      final row=math.min(list.isEmpty?0:(list.length-1)~/_crossAxisCount,(gridY/rowHeight).floor());
+      final index=math.min(row*_crossAxisCount,math.max(0,list.length-1));
+      final rowOffset=(gridY-row*rowHeight).clamp(0.0,tile).toDouble();
+      if(list.isNotEmpty)return _Anchor(_keyFor(list[index]),date,rowOffset);
       final rows=(list.length/_crossAxisCount).ceil();
-      final groupHeight=_headerExtent+rows*tile+(rows>0?math.max(0,rows-1)*2:0);
-      if(contentY<cursor+groupHeight)return _Anchor(date,(contentY-cursor).clamp(0.0,groupHeight).toDouble());
-      cursor+=groupHeight;
+      cursor+=_headerExtent+rows*rowHeight;
     }
-    return const _Anchor(null,0);
+    return const _Anchor(null,null,0);
   }
 
   double _contentOffsetForAnchor(_Anchor anchor,int columns){
     if(anchor.date==null)return 0;
     final width=MediaQuery.sizeOf(context).width;
     final tile=(width-4-2*(columns-1))/columns;
+    const spacing=2.0;
     var cursor=0.0;
     final dates=_mediaGroups.keys.toList()..sort((a,b)=>b.compareTo(a));
     for(final date in dates){
       final list=_mediaGroups[date]!;
       final rows=(list.length/columns).ceil();
-      final groupHeight=_headerExtent+rows*tile+(rows>0?math.max(0,rows-1)*2:0);
-      if(anchor.date==date)return cursor+anchor.inGroupOffset.clamp(0.0,groupHeight);
-      cursor+=groupHeight;
+      if(anchor.date==date){
+        if(anchor.itemKey!=null){
+          final index=list.indexWhere((item)=>_keyFor(item)==anchor.itemKey);
+          if(index>=0){
+            final row=index~/columns;
+            return cursor+_headerExtent+row*(tile+spacing)+anchor.rowOffset;
+          }
+        }
+        return cursor+anchor.rowOffset;
+      }
+      cursor+=_headerExtent+rows*(tile+spacing);
     }
     return cursor;
   }
 
-  double _pinchViewportY(){
-    if(_pointers.length<2)return 0;
+  Offset _pinchViewport(){
+    if(_pointers.length<2)return Offset.zero;
     final values=_pointers.values.toList();
-    final midpointY=(values[0].dy+values[1].dy)/2;
+    final midpoint=Offset((values[0].dx+values[1].dx)/2,(values[0].dy+values[1].dy)/2);
     final renderBox=_gridKey.currentContext?.findRenderObject();
-    if(renderBox is RenderBox)return renderBox.globalToLocal(Offset(0,midpointY)).dy;
-    return 0;
+    if(renderBox is RenderBox)return renderBox.globalToLocal(midpoint);
+    return Offset.zero;
   }
 
   void _pointerDown(PointerDownEvent e){
@@ -182,13 +201,13 @@ class _PhotosScreenState extends State<PhotosScreen>{
     _lastPinchRatio=ratio;
     final next=(_pinchStartColumns*ratio).round().clamp(2,6);
     if(next==_crossAxisCount)return;
-    final viewportY=_pinchViewportY();
-    final anchor=_captureAnchorAtViewport(viewportY);
+    final viewport=_pinchViewport();
+    final anchor=_captureAnchorAtViewport(viewport);
     setState(()=>_crossAxisCount=next);
     WidgetsBinding.instance.addPostFrameCallback((_){
       if(!mounted||!_scrollController.hasClients||anchor.date==null)return;
       final contentTarget=_contentOffsetForAnchor(anchor,next);
-      final target=(contentTarget-viewportY).clamp(0.0,_scrollController.position.maxScrollExtent).toDouble();
+      final target=(contentTarget-viewport.dy).clamp(0.0,_scrollController.position.maxScrollExtent).toDouble();
       _scrollController.jumpTo(target);
     });
   }
@@ -312,8 +331,9 @@ class _PhotosScreenState extends State<PhotosScreen>{
   Widget _buildStatusBadge({required bool local,required bool cloud}){final icon=local&&cloud?Icons.cloud_done:cloud?Icons.cloud_done:Icons.smartphone;final label=local&&cloud?'On device + cloud':cloud?'Cloud':'On device';return Positioned(top:5,right:5,child:Tooltip(message:label,child:Container(padding:const EdgeInsets.all(5),decoration:BoxDecoration(color:Colors.black.withValues(alpha:.62),shape:BoxShape.circle),child:Icon(icon,color:Colors.white,size:16))));}
 }
 class _Anchor{
+  final String? itemKey;
   final DateTime? date;
-  final double inGroupOffset;
-  const _Anchor(this.date,this.inGroupOffset);
+  final double rowOffset;
+  const _Anchor(this.itemKey,this.date,this.rowOffset);
 }
 class _MediaItem{final Photo? cloud;final LocalMedia? local;final bool alsoLocal;const _MediaItem._({this.cloud,this.local,this.alsoLocal=false});factory _MediaItem.cloud(Photo p,{required bool alsoLocal})=>_MediaItem._(cloud:p,alsoLocal:alsoLocal);factory _MediaItem.local(LocalMedia m)=>_MediaItem._(local:m);bool get isCloud=>cloud!=null;DateTime get date=>isCloud?DateTime.parse(cloud!.uploadedAt).toLocal():local!.createdAt;}
