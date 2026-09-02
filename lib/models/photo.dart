@@ -8,6 +8,7 @@ class Photo {
   final String? thumbnailUrl;
   final String? playbackUrl;
   final String? playbackStatus;
+  final bool isFavorite;
 
   Photo({
     required this.id,
@@ -19,6 +20,7 @@ class Photo {
     this.thumbnailUrl,
     this.playbackUrl,
     this.playbackStatus,
+    this.isFavorite = false,
   });
 
   factory Photo.fromJson(Map<String, dynamic> json) {
@@ -33,6 +35,7 @@ class Photo {
       thumbnailUrl: json['thumbnail_url'] ?? '/photos/${json['id']}/thumbnail',
       playbackUrl: playback is Map<String, dynamic> ? playback['url'] as String? : null,
       playbackStatus: playback is Map<String, dynamic> ? playback['status'] as String? : null,
+      isFavorite: json['is_favorite'] == true,
     );
   }
 }
