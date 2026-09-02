@@ -50,7 +50,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
 
   void _onScroll(){
     _syncFastScrollbar();
-    if(!_hasMoreLocal||_isLoadingMoreLocal||!_scrollController.hasClients)return;
+    if(_isPinching||!_hasMoreLocal||_isLoadingMoreLocal||!_scrollController.hasClients)return;
     final position=_scrollController.position;
     if(position.maxScrollExtent-position.pixels<=_loadMoreThreshold)_loadMoreLocal();
   }
@@ -166,7 +166,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
         final key=_tileKeyFor(item);
         final renderObject=key.currentContext?.findRenderObject();
         double offset=fallbackOffset;
-        if(renderObject is RenderBox){offset=midpointGlobal.dy-renderObject.localToGlobal(Offset.zero).dy;}
+        if(renderObject is RenderBox)offset=midpointGlobal.dy-renderObject.localToGlobal(Offset.zero).dy;
         return _Anchor(_keyFor(item),date,offset,renderKey:key,globalPoint:midpointGlobal);
       }
       cursor+=groupHeight;
@@ -221,6 +221,17 @@ class _PhotosScreenState extends State<PhotosScreen>{
     if((target-_scrollController.offset).abs()>.1)_scrollController.jumpTo(target);
   }
 
+  void _schedulePinchCorrection(_Anchor anchor,int columns,int version){
+    WidgetsBinding.instance.addPostFrameCallback((_){
+      if(version!=_pinchAnchorVersion||!mounted)return;
+      _correctPinchAnchor(anchor,columns,version);
+      WidgetsBinding.instance.addPostFrameCallback((_){
+        if(version!=_pinchAnchorVersion||!mounted)return;
+        _correctPinchAnchor(anchor,columns,version);
+      });
+    });
+  }
+
   void _pointerDown(PointerDownEvent e){
     _pointers[e.pointer]=e.position;
     if(_pointers.length==2){
@@ -251,7 +262,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
     final anchor=_captureAnchorAtViewport(viewport);
     final version=++_pinchAnchorVersion;
     setState(()=>_crossAxisCount=next);
-    WidgetsBinding.instance.addPostFrameCallback((_){_correctPinchAnchor(anchor,next,version);});
+    _schedulePinchCorrection(anchor,next,version);
   }
 
   void _pointerUp(PointerEvent e){
@@ -260,6 +271,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
       _pinchStartDistance=null;
       _pinchDirectionLocked=false;
       setState(()=>_isPinching=false);
+      WidgetsBinding.instance.addPostFrameCallback((_){if(mounted)_onScroll();});
     }
   }
   double _distanceBetweenPointers(){if(_pointers.length<2)return 0;final v=_pointers.values.toList();final dx=v[0].dx-v[1].dx,dy=v[0].dy-v[1].dy;return math.sqrt(dx*dx+dy*dy);}
@@ -344,18 +356,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
                   },
                   onVerticalDragEnd:(_){setState(()=>_fastScrolling=false);},
                   child:Stack(children:[
-                    Positioned(
-                      top:thumbTop,
-                      right:6,
-                      child:Container(
-                        width:7,
-                        height:_fastThumbHeight,
-                        decoration:BoxDecoration(
-                          color:Theme.of(context).colorScheme.onSurface.withValues(alpha:.55),
-                          borderRadius:BorderRadius.circular(8),
-                        ),
-                      ),
-                    ),
+                    Positioned(top:thumbTop,right:6,child:Container(width:7,height:_fastThumbHeight,decoration:BoxDecoration(color:Theme.of(context).colorScheme.onSurface.withValues(alpha:.55),borderRadius:BorderRadius.circular(8)))),
                   ]),
                 );
               },
@@ -367,7 +368,13 @@ class _PhotosScreenState extends State<PhotosScreen>{
     ]));
   }
 
-  Widget _buildMediaTile(_MediaItem item){final selected=_isSelected(item);Widget image;if(item.isCloud)image=PhotoThumbnail(photo:item.cloud!,token:widget.token);else{final l=item.local!;image=Stack(fit:StackFit.expand,children:[AssetEntityImage(l.asset,isOriginal:false,thumbnailSize:const ThumbnailSize.square(240),thumbnailFormat:ThumbnailFormat.jpeg,fit:BoxFit.cover),if(l.isVideo)const Positioned(right:8,bottom:8,child:Icon(Icons.play_circle_fill,color:Colors.white,size:28))]);}return GestureDetector(key:_tileKeyFor(item),onTap:()=>_handleTap(item),onLongPress:()=>_enterSelection(item),child:Stack(fit:StackFit.expand,children:[image,if(item.isCloud)_buildStatusBadge(local:item.alsoLocal,cloud:true)else _buildStatusBadge(local:true,cloud:item.local!.alsoInCloud),if(selected)Container(color:Theme.of(context).colorScheme.primary.withValues(alpha:.38),child:Align(alignment:Alignment.topLeft,child:Container(margin:const EdgeInsets.all(6),decoration:BoxDecoration(color:Theme.of(context).colorScheme.primary,shape:BoxShape.circle),padding:const EdgeInsets.all(2),child:const Icon(Icons.check,color:Colors.white,size:18))))]));}
+  Widget _buildMediaTile(_MediaItem item){
+    final selected=_isSelected(item);
+    Widget image;
+    if(item.isCloud)image=PhotoThumbnail(photo:item.cloud!,token:widget.token);
+    else{final l=item.local!;image=Stack(fit:StackFit.expand,children:[AssetEntityImage(l.asset,isOriginal:false,thumbnailSize:const ThumbnailSize.square(240),thumbnailFormat:ThumbnailFormat.jpeg,fit:BoxFit.cover),if(l.isVideo)const Positioned(right:8,bottom:8,child:Icon(Icons.play_circle_fill,color:Colors.white,size:28))]);}
+    return KeyedSubtree(key:_tileKeyFor(item),child:GestureDetector(onTap:()=>_handleTap(item),onLongPress:()=>_enterSelection(item),child:Stack(fit:StackFit.expand,children:[image,if(item.isCloud)_buildStatusBadge(local:item.alsoLocal,cloud:true)else _buildStatusBadge(local:true,cloud:item.local!.alsoInCloud),if(selected)Container(color:Theme.of(context).colorScheme.primary.withValues(alpha:.38),child:Align(alignment:Alignment.topLeft,child:Container(margin:const EdgeInsets.all(6),decoration:BoxDecoration(color:Theme.of(context).colorScheme.primary,shape:BoxShape.circle),padding:const EdgeInsets.all(2),child:const Icon(Icons.check,color:Colors.white,size:18))))])));
+  }
   Widget _buildStatusBadge({required bool local,required bool cloud}){final icon=local&&cloud?Icons.cloud_done:cloud?Icons.cloud_done:Icons.smartphone;final label=local&&cloud?'On device + cloud':cloud?'Cloud':'On device';return Positioned(top:5,right:5,child:Tooltip(message:label,child:Container(padding:const EdgeInsets.all(5),decoration:BoxDecoration(color:Colors.black.withValues(alpha:.62),shape:BoxShape.circle),child:Icon(icon,color:Colors.white,size:16))));}
 }
 
