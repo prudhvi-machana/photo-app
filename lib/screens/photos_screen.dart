@@ -20,6 +20,7 @@ class PhotosScreen extends StatefulWidget {
 
 class _PhotosScreenState extends State<PhotosScreen>{
   final ApiService _apiService=ApiService();
+  final GlobalKey _gridKey=GlobalKey();
   List<Photo> _cloudPhotos=[];
   List<LocalMedia> _localMedia=[];
   Map<DateTime,List<_MediaItem>> _mediaGroups={};
@@ -124,9 +125,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
       final list=_mediaGroups[date]!;
       final rows=(list.length/_crossAxisCount).ceil();
       final groupHeight=_headerExtent+rows*tile+(rows>0?math.max(0,rows-1)*2:0);
-      if(contentY<cursor+groupHeight){
-        return _Anchor(date,(contentY-cursor).clamp(0.0,groupHeight).toDouble());
-      }
+      if(contentY<cursor+groupHeight)return _Anchor(date,(contentY-cursor).clamp(0.0,groupHeight).toDouble());
       cursor+=groupHeight;
     }
     return const _Anchor(null,0);
@@ -149,12 +148,12 @@ class _PhotosScreenState extends State<PhotosScreen>{
   }
 
   double _pinchViewportY(){
-    if(_pointers.length<2)return MediaQuery.sizeOf(context).height/2;
+    if(_pointers.length<2)return 0;
     final values=_pointers.values.toList();
     final midpointY=(values[0].dy+values[1].dy)/2;
-    final renderBox=context.findRenderObject();
+    final renderBox=_gridKey.currentContext?.findRenderObject();
     if(renderBox is RenderBox)return renderBox.globalToLocal(Offset(0,midpointY)).dy;
-    return midpointY;
+    return 0;
   }
 
   void _pointerDown(PointerDownEvent e){
@@ -183,7 +182,6 @@ class _PhotosScreenState extends State<PhotosScreen>{
     _lastPinchRatio=ratio;
     final next=(_pinchStartColumns*ratio).round().clamp(2,6);
     if(next==_crossAxisCount)return;
-
     final viewportY=_pinchViewportY();
     final anchor=_captureAnchorAtViewport(viewportY);
     setState(()=>_crossAxisCount=next);
@@ -254,7 +252,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
     if(!_hasLocalPermission&&_cloudPhotos.isEmpty)return const Center(child:Text('Allow photo access to see your device media.'));
     final dates=_mediaGroups.keys.toList()..sort((a,b)=>b.compareTo(a));
     return Listener(behavior:HitTestBehavior.translucent,onPointerDown:_pointerDown,onPointerMove:_pointerMove,onPointerUp:_pointerUp,onPointerCancel:_pointerUp,child:Stack(children:[
-      RefreshIndicator(onRefresh:_refresh,child:CustomScrollView(controller:_scrollController,physics:_isPinching?const NeverScrollableScrollPhysics():const AlwaysScrollableScrollPhysics(),slivers:[
+      RefreshIndicator(onRefresh:_refresh,child:CustomScrollView(key:_gridKey,controller:_scrollController,physics:_isPinching?const NeverScrollableScrollPhysics():const AlwaysScrollableScrollPhysics(),slivers:[
         if(!_hasLocalPermission)const SliverToBoxAdapter(child:Padding(padding:EdgeInsets.fromLTRB(12,10,12,0),child:Text('Device photos are hidden until photo access is allowed.'))),
         for(final date in dates)...[
           SliverToBoxAdapter(child:SizedBox(height:_headerExtent,child:Padding(padding:const EdgeInsets.fromLTRB(12,14,12,8),child:Text(_dateLabel(date),style:Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight:FontWeight.w600))))),
