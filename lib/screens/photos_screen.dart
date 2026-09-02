@@ -261,7 +261,49 @@ class _PhotosScreenState extends State<PhotosScreen>{
         if(_isLoadingMoreLocal)const SliverToBoxAdapter(child:Padding(padding:EdgeInsets.all(18),child:Center(child:SizedBox(width:22,height:22,child:CircularProgressIndicator(strokeWidth:2))))),
         const SliverToBoxAdapter(child:SizedBox(height:24))
       ])),
-      Positioned(right:0,top:0,bottom:0,width:44,child:LayoutBuilder(builder:(context,box){final track=box.maxHeight;final travel=math.max(1.0,track-_fastThumbHeight);return ValueListenableBuilder<double>(valueListenable:_fastScrollFraction,builder:(context,fraction,_){final thumbTop=fraction*travel;return GestureDetector(behavior:HitTestBehavior.translucent,onVerticalDragStart:(_){setState(()=>_fastScrolling=true);},onVerticalDragUpdate:(d){final double f=((d.localPosition.dy-_fastThumbHeight/2)/travel).clamp(0.0,1.0).toDouble();_fastScrollToFraction(f);},onVerticalDragEnd:(_){setState(()=>_fastScrolling=false);},child:Stack(children:[Positioned(top:thumbTop,right:6,child:Container(width:7,height:_fastThumbHeight,decoration:BoxDecoration(color:Theme.of(context).colorScheme.onSurface.withValues(alpha:.55),borderRadius:BorderRadius.circular(8))))]));});}),
+      Positioned(
+        right:0,
+        top:0,
+        bottom:0,
+        width:44,
+        child:LayoutBuilder(
+          builder:(context,box){
+            final track=box.maxHeight;
+            final travel=math.max(1.0,track-_fastThumbHeight);
+            return ValueListenableBuilder<double>(
+              valueListenable:_fastScrollFraction,
+              builder:(context,fraction,_){
+                final thumbTop=fraction*travel;
+                return GestureDetector(
+                  behavior:HitTestBehavior.translucent,
+                  onVerticalDragStart:(_){setState(()=>_fastScrolling=true);},
+                  onVerticalDragUpdate:(d){
+                    final double f=((d.localPosition.dy-_fastThumbHeight/2)/travel).clamp(0.0,1.0).toDouble();
+                    _fastScrollToFraction(f);
+                  },
+                  onVerticalDragEnd:(_){setState(()=>_fastScrolling=false);},
+                  child:Stack(
+                    children:[
+                      Positioned(
+                        top:thumbTop,
+                        right:6,
+                        child:Container(
+                          width:7,
+                          height:_fastThumbHeight,
+                          decoration:BoxDecoration(
+                            color:Theme.of(context).colorScheme.onSurface.withValues(alpha:.55),
+                            borderRadius:BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
       ValueListenableBuilder<DateTime?>(valueListenable:_fastScrollDate,builder:(context,date,_){if(!_fastScrolling||date==null)return const SizedBox.shrink();return Positioned(right:50,top:MediaQuery.sizeOf(context).height*.42,child:Material(color:Colors.black87,borderRadius:BorderRadius.circular(10),child:Padding(padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),child:Text(_dateLabel(date),style:const TextStyle(color:Colors.white,fontWeight:FontWeight.w600)))));})
     ]));
   }
