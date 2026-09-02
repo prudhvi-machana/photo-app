@@ -289,7 +289,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
           SliverToBoxAdapter(child:SizedBox(height:_headerExtent,child:Padding(padding:const EdgeInsets.fromLTRB(12,14,12,8),child:Text(_dateLabel(date),style:Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight:FontWeight.w600))))),
           SliverPadding(padding:const EdgeInsets.symmetric(horizontal:2),sliver:SliverGrid(delegate:SliverChildBuilderDelegate((context,index)=>_buildMediaTile(_mediaGroups[date]![index]),childCount:_mediaGroups[date]!.length),gridDelegate:SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:_crossAxisCount,crossAxisSpacing:2,mainAxisSpacing:2,childAspectRatio:1)))
         ],
-        if(_isLoadingMoreLocal)const SliverToBoxAdapter(child:Padding(padding:EdgeInsets.all(18),child:Center(child:SizedBox(width:22,height:22,child:CircularProgressIndicator(strokeWidth:2)))),
+        if(_isLoadingMoreLocal)const SliverToBoxAdapter(child:Padding(padding:EdgeInsets.all(18),child:Center(child:SizedBox(width:22,height:22,child:CircularProgressIndicator(strokeWidth:2))))),
         const SliverToBoxAdapter(child:SizedBox(height:24))
       ])),
       Positioned(
