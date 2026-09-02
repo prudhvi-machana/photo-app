@@ -37,13 +37,8 @@ class _ViewerItem {
   const _ViewerItem.local(this.local) : cloud = null;
 
   bool get isCloud => cloud != null;
-  DateTime get date => isCloud
-      ? DateTime.parse(cloud!.uploadedAt).toLocal()
-      : local!.createdAt;
-
-  String get identity => isCloud
-      ? 'cloud:${cloud!.id}'
-      : 'local:${local!.asset.id}';
+  DateTime get date => isCloud ? DateTime.parse(cloud!.uploadedAt).toLocal() : local!.createdAt;
+  String get identity => isCloud ? 'cloud:${cloud!.id}' : 'local:${local!.asset.id}';
 }
 
 class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
@@ -70,8 +65,8 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
       if (name.isNotEmpty) cloudNames.add(name);
     }
 
-    // PhotosScreen hides local files whose filename is already represented
-    // by a cloud photo. Keep the viewer's item list consistent with the grid.
+    // Keep this consistent with PhotosScreen: a local file whose filename is
+    // already represented by a cloud photo is not shown as a second tile.
     for (final media in widget.localMedia) {
       final name = media.filename.trim().toLowerCase();
       if (name.isEmpty || !cloudNames.contains(name)) {
@@ -173,17 +168,12 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
       body: PageView.builder(
         controller: _pageController,
         itemCount: _items.length,
-        physics: _isInteractingWithImage
-            ? const NeverScrollableScrollPhysics()
-            : const PageScrollPhysics(),
+        physics: _isInteractingWithImage ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
         onPageChanged: (index) => setState(() => _currentIndex = index),
         itemBuilder: (context, index) {
           final item = _items[index];
           if (_isVideo(item)) {
-            return _VideoViewer(
-              item: item,
-              token: widget.token,
-            );
+            return _VideoViewer(item: item, token: widget.token);
           }
 
           return _ImageViewer(
@@ -274,8 +264,6 @@ class _VideoViewerState extends State<_VideoViewer> {
     _initialize();
   }
 
-  String? _localFilePath() => null;
-
   Future<void> _initialize() async {
     try {
       late final VideoPlayerController controller;
@@ -292,10 +280,7 @@ class _VideoViewerState extends State<_VideoViewer> {
 
         controller = VideoPlayerController.networkUrl(
           Uri.parse(playbackUrl()),
-          httpHeaders: {
-            'Authorization': 'Bearer ${widget.token}',
-            'Accept': 'video/*',
-          },
+          httpHeaders: {'Authorization': 'Bearer ${widget.token}', 'Accept': 'video/*'},
         );
       } else {
         final file = await widget.item.local!.asset.file;
@@ -306,7 +291,6 @@ class _VideoViewerState extends State<_VideoViewer> {
       _controller = controller;
       controller.addListener(_videoListener);
       await controller.initialize();
-      if (!_isCloud) await controller.setLooping(false);
       if (!mounted) {
         await controller.dispose();
         return;
@@ -346,24 +330,16 @@ class _VideoViewerState extends State<_VideoViewer> {
     final hours = duration.inHours;
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return hours > 0
-        ? '$hours:$minutes:$seconds'
-        : '${duration.inMinutes.toString().padLeft(2, '0')}:$seconds';
+    return hours > 0 ? '$hours:$minutes:$seconds' : '${duration.inMinutes.toString().padLeft(2, '0')}:$seconds';
   }
 
   Future<void> _setFullscreen(bool enabled) async {
     if (enabled) {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      await SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
+      await SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
     } else {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      await SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
+      await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
     }
     if (mounted) setState(() => _isFullscreen = enabled);
   }
@@ -375,10 +351,7 @@ class _VideoViewerState extends State<_VideoViewer> {
     controller?.dispose();
     if (_isFullscreen) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
+      SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
     }
     super.dispose();
   }
@@ -443,17 +416,10 @@ class _VideoViewerState extends State<_VideoViewer> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              _ControlButton(
-                                icon: Icons.replay_10,
-                                onPressed: () => _seekBy(const Duration(seconds: -10)),
-                              ),
+                              _ControlButton(icon: Icons.replay_10, onPressed: () => _seekBy(const Duration(seconds: -10))),
                               const SizedBox(width: 28),
                               _ControlButton(
-                                icon: isEnded
-                                    ? Icons.replay
-                                    : value.isPlaying
-                                        ? Icons.pause
-                                        : Icons.play_arrow,
+                                icon: isEnded ? Icons.replay : value.isPlaying ? Icons.pause : Icons.play_arrow,
                                 size: 64,
                                 iconSize: 38,
                                 onPressed: () {
@@ -466,10 +432,7 @@ class _VideoViewerState extends State<_VideoViewer> {
                                 },
                               ),
                               const SizedBox(width: 28),
-                              _ControlButton(
-                                icon: Icons.forward_10,
-                                onPressed: () => _seekBy(const Duration(seconds: 10)),
-                              ),
+                              _ControlButton(icon: Icons.forward_10, onPressed: () => _seekBy(const Duration(seconds: 10))),
                             ],
                           ),
                         ),
@@ -482,15 +445,9 @@ class _VideoViewerState extends State<_VideoViewer> {
                             children: [
                               Row(
                                 children: [
-                                  Text(
-                                    _formatDuration(position),
-                                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                                  ),
+                                  Text(_formatDuration(position), style: const TextStyle(color: Colors.white, fontSize: 12)),
                                   const Spacer(),
-                                  Text(
-                                    _formatDuration(duration),
-                                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                                  ),
+                                  Text(_formatDuration(duration), style: const TextStyle(color: Colors.white, fontSize: 12)),
                                 ],
                               ),
                               SizedBox(
@@ -520,26 +477,17 @@ class _VideoViewerState extends State<_VideoViewer> {
                                       for (final speed in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0])
                                         PopupMenuItem(
                                           value: speed,
-                                          child: Text(
-                                            '${speed}x',
-                                            style: const TextStyle(color: Colors.white),
-                                          ),
+                                          child: Text('${speed}x', style: const TextStyle(color: Colors.white)),
                                         ),
                                     ],
                                     child: Padding(
                                       padding: const EdgeInsets.all(8),
-                                      child: Text(
-                                        '${_playbackSpeed}x',
-                                        style: const TextStyle(color: Colors.white, fontSize: 13),
-                                      ),
+                                      child: Text('${_playbackSpeed}x', style: const TextStyle(color: Colors.white, fontSize: 13)),
                                     ),
                                   ),
                                   IconButton(
                                     onPressed: () => _setFullscreen(!_isFullscreen),
-                                    icon: Icon(
-                                      _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                                      color: Colors.white,
-                                    ),
+                                    icon: Icon(_isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen, color: Colors.white),
                                   ),
                                 ],
                               ),
@@ -573,12 +521,7 @@ class _ControlButton extends StatelessWidget {
   final double size;
   final double iconSize;
 
-  const _ControlButton({
-    required this.icon,
-    required this.onPressed,
-    this.size = 50,
-    this.iconSize = 30,
-  });
+  const _ControlButton({required this.icon, required this.onPressed, this.size = 50, this.iconSize = 30});
 
   @override
   Widget build(BuildContext context) => Material(
@@ -587,11 +530,7 @@ class _ControlButton extends StatelessWidget {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onPressed,
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: Icon(icon, color: Colors.white, size: iconSize),
-          ),
+          child: SizedBox(width: size, height: size, child: Icon(icon, color: Colors.white, size: iconSize)),
         ),
       );
 }
