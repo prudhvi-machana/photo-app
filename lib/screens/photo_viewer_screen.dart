@@ -80,8 +80,6 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
       if (name.isNotEmpty) cloudNames.add(name);
     }
 
-    // Keep this consistent with PhotosScreen: a local file whose filename is
-    // already represented by a cloud photo is not shown as a second item.
     for (final media in widget.localMedia) {
       final name = media.filename.trim().toLowerCase();
       if (name.isEmpty || !cloudNames.contains(name)) {
@@ -138,9 +136,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
         saved.where((id) => id.startsWith('local:')).map((id) => id.substring(6)),
       );
       _favoriteCloudIds.addAll(
-        widget.photos
-            .where((photo) => photo.isFavorite)
-            .map((photo) => photo.id),
+        widget.photos.where((photo) => photo.isFavorite).map((photo) => photo.id),
       );
     });
   }
@@ -149,10 +145,9 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
     final item = _currentItem;
 
     if (item.isCloud) {
+      if (_isActionRunning) return;
       final photo = item.cloud!;
       final currentlyFavorite = _favoriteCloudIds.contains(photo.id);
-      if (_isActionRunning) return;
-
       setState(() => _isActionRunning = true);
       try {
         await _apiService.setFavorite(photo.id, !currentlyFavorite);
@@ -184,8 +179,10 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
         _favoriteLocalIds.add(id);
       }
     });
-    final saved = _favoriteLocalIds.map((value) => 'local:$value').toList();
-    await prefs.setStringList('favorite_media_ids', saved);
+    await prefs.setStringList(
+      'favorite_media_ids',
+      _favoriteLocalIds.map((value) => 'local:$value').toList(),
+    );
   }
 
   Future<void> _downloadCurrent() async {
@@ -219,24 +216,15 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Move to Trash?'),
-        content: const Text(
-          'This photo will be moved to Trash. You can restore it for 30 days.',
-        ),
+        content: const Text('This photo will be moved to Trash. You can restore it for 30 days.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Move to Trash'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Move to Trash')),
         ],
       ),
     );
 
     if (confirmed != true || !mounted) return;
-
     setState(() => _isActionRunning = true);
     try {
       await _apiService.movePhotoToTrash(item.cloud!.id);
@@ -257,7 +245,6 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
   Future<void> _uploadCurrent() async {
     final item = _currentItem;
     if (item.isCloud || _isActionRunning) return;
-
     final media = item.local!;
     final file = await media.asset.file;
     if (file == null) {
@@ -309,23 +296,28 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
 
   String _formatDate(DateTime date) {
     final local = date.toLocal();
-    final month = const [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ][local.month - 1];
-    return '$month ${local.day}, ${local.year} • '
-        '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[local.month - 1]} ${local.day}, ${local.year} • ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
 
-  void _showDetails() {
+  Future<void> _showDetails() async {
+    final item = _currentItem;
+    int? sizeBytes;
+    if (!item.isCloud) {
+      final file = await item.local!.asset.file;
+      sizeBytes = file?.lengthSync();
+    }
+    if (!mounted) return;
+
     setState(() => _detailsOpen = true);
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) => _DetailsSheet(
-        item: _currentItem,
-        isVideo: _isVideo(_currentItem),
+        item: item,
+        isVideo: _isVideo(item),
+        sizeBytes: sizeBytes,
         formatBytes: _formatBytes,
         formatDate: _formatDate,
       ),
@@ -345,14 +337,11 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
     if (_items.isEmpty) {
       return const Scaffold(
         backgroundColor: Colors.black,
-        body: Center(
-          child: Text('No media available.', style: TextStyle(color: Colors.white)),
-        ),
+        body: Center(child: Text('No media available.', style: TextStyle(color: Colors.white))),
       );
     }
 
     final currentItem = _currentItem;
-
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -365,28 +354,12 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
             tooltip: _currentIsFavorite ? 'Remove from favourites' : 'Add to favourites',
           ),
           if (currentItem.isCloud)
-            IconButton(
-              onPressed: _isActionRunning ? null : _downloadCurrent,
-              icon: const Icon(Icons.download),
-              tooltip: 'Download',
-            )
+            IconButton(onPressed: _isActionRunning ? null : _downloadCurrent, icon: const Icon(Icons.download), tooltip: 'Download')
           else
-            IconButton(
-              onPressed: _isActionRunning ? null : _uploadCurrent,
-              icon: const Icon(Icons.cloud_upload_outlined),
-              tooltip: 'Upload to cloud',
-            ),
+            IconButton(onPressed: _isActionRunning ? null : _uploadCurrent, icon: const Icon(Icons.cloud_upload_outlined), tooltip: 'Upload to cloud'),
           if (currentItem.isCloud)
-            IconButton(
-              onPressed: _isActionRunning ? null : _deleteCurrent,
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'Move to Trash',
-            ),
-          IconButton(
-            onPressed: _detailsOpen ? null : _showDetails,
-            icon: const Icon(Icons.info_outline),
-            tooltip: 'Details',
-          ),
+            IconButton(onPressed: _isActionRunning ? null : _deleteCurrent, icon: const Icon(Icons.delete_outline), tooltip: 'Move to Trash'),
+          IconButton(onPressed: _detailsOpen ? null : _showDetails, icon: const Icon(Icons.info_outline), tooltip: 'Details'),
         ],
       ),
       body: Stack(
@@ -394,16 +367,11 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
           PageView.builder(
             controller: _pageController,
             itemCount: _items.length,
-            physics: _isInteractingWithImage
-                ? const NeverScrollableScrollPhysics()
-                : const PageScrollPhysics(),
+            physics: _isInteractingWithImage ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
             onPageChanged: (index) => setState(() => _currentIndex = index),
             itemBuilder: (context, index) {
               final item = _items[index];
-              if (_isVideo(item)) {
-                return _VideoViewer(item: item, token: widget.token);
-              }
-
+              if (_isVideo(item)) return _VideoViewer(item: item, token: widget.token);
               return _ImageViewer(
                 item: item,
                 token: widget.token,
@@ -422,9 +390,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
               top: false,
               child: GestureDetector(
                 onVerticalDragUpdate: (details) {
-                  if (details.primaryDelta != null && details.primaryDelta! < -4) {
-                    _showDetails();
-                  }
+                  if (details.primaryDelta != null && details.primaryDelta! < -4) _showDetails();
                 },
                 child: Container(
                   height: 34,
@@ -433,10 +399,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
                     width: 42,
                     height: 5,
                     margin: const EdgeInsets.only(top: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white70,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
+                    decoration: BoxDecoration(color: Colors.white70, borderRadius: BorderRadius.circular(4)),
                   ),
                 ),
               ),
@@ -451,24 +414,22 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
 class _DetailsSheet extends StatelessWidget {
   final _ViewerItem item;
   final bool isVideo;
+  final int? sizeBytes;
   final String Function(int) formatBytes;
   final String Function(DateTime) formatDate;
 
   const _DetailsSheet({
     required this.item,
     required this.isVideo,
+    required this.sizeBytes,
     required this.formatBytes,
     required this.formatDate,
   });
 
   @override
   Widget build(BuildContext context) {
-    final filename = item.isCloud
-        ? item.cloud!.originalFilename
-        : item.local!.filename;
-    final mime = item.isCloud
-        ? item.cloud!.mimeType
-        : (isVideo ? 'Video' : 'Image');
+    final filename = item.isCloud ? item.cloud!.originalFilename : item.local!.filename;
+    final mime = item.isCloud ? item.cloud!.mimeType : (isVideo ? 'Video' : 'Image');
     final date = item.date;
 
     return SafeArea(
@@ -482,36 +443,17 @@ class _DetailsSheet extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(
-                child: Container(
-                  width: 42,
-                  height: 5,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.outlineVariant,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ),
+              Center(child: Container(width: 42, height: 5, decoration: BoxDecoration(color: Theme.of(context).colorScheme.outlineVariant, borderRadius: BorderRadius.circular(4)))),
               const SizedBox(height: 18),
               Text('Details', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 16),
               _DetailRow(label: 'Name', value: filename.isEmpty ? 'Unknown' : filename),
               _DetailRow(label: 'Type', value: mime),
-              _DetailRow(
-                label: item.isCloud ? 'Uploaded' : 'Date taken',
-                value: formatDate(date),
-              ),
-              if (item.isCloud)
-                _DetailRow(label: 'Size', value: formatBytes(item.cloud!.size)),
-              if (!item.isCloud)
-                _DetailRow(
-                  label: 'Resolution',
-                  value: '${item.local!.asset.width} × ${item.local!.asset.height}',
-                ),
-              if (item.isCloud)
-                _DetailRow(label: 'Cloud ID', value: '${item.cloud!.id}'),
-              if (!item.isCloud)
-                _DetailRow(label: 'Local ID', value: item.local!.asset.id),
+              _DetailRow(label: item.isCloud ? 'Uploaded' : 'Date taken', value: formatDate(date)),
+              if (sizeBytes != null) _DetailRow(label: 'Size', value: formatBytes(sizeBytes!)),
+              if (!item.isCloud) _DetailRow(label: 'Resolution', value: '${item.local!.asset.width} × ${item.local!.asset.height}'),
+              if (item.isCloud) _DetailRow(label: 'Cloud ID', value: '${item.cloud!.id}'),
+              if (!item.isCloud) _DetailRow(label: 'Local ID', value: item.local!.asset.id),
             ],
           ),
         ),
@@ -533,15 +475,7 @@ class _DetailRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 92,
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-            ),
-          ),
+          SizedBox(width: 92, child: Text(label, style: Theme.of(context).textTheme.labelLarge?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant))),
           const SizedBox(width: 12),
           Expanded(child: Text(value)),
         ],
@@ -556,54 +490,40 @@ class _ImageViewer extends StatelessWidget {
   final GestureScaleStartCallback? onInteractionStart;
   final GestureScaleEndCallback? onInteractionEnd;
 
-  const _ImageViewer({
-    required this.item,
-    required this.token,
-    required this.onInteractionStart,
-    required this.onInteractionEnd,
-  });
+  const _ImageViewer({required this.item, required this.token, required this.onInteractionStart, required this.onInteractionEnd});
 
   @override
   Widget build(BuildContext context) {
+    final Widget image;
     if (!item.isCloud) {
-      return GestureDetector(
-        onScaleStart: onInteractionStart,
-        onScaleEnd: onInteractionEnd,
-        child: InteractiveViewer(
-          minScale: 1,
-          maxScale: 5,
-          child: Center(
-            child: AssetEntityImage(
-              item.local!.asset,
-              isOriginal: false,
-              fit: BoxFit.contain,
-            ),
-          ),
-        ),
+      image = AssetEntityImage(
+        item.local!.asset,
+        isOriginal: true,
+        fit: BoxFit.contain,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    } else {
+      final photo = item.cloud!;
+      image = Image.network(
+        '${ApiConfig.baseUrl}/photos/${photo.id}',
+        headers: {'Authorization': 'Bearer $token'},
+        fit: BoxFit.contain,
+        width: double.infinity,
+        height: double.infinity,
+        errorBuilder: (context, error, stackTrace) => const Center(child: Icon(Icons.broken_image_outlined, color: Colors.white54, size: 56)),
+        loadingBuilder: (context, child, progress) => progress == null ? child : const Center(child: CircularProgressIndicator()),
       );
     }
 
-    final photo = item.cloud!;
-    final apiUrl = '${ApiConfig.baseUrl}/photos/${photo.id}';
     return GestureDetector(
       onScaleStart: onInteractionStart,
       onScaleEnd: onInteractionEnd,
-      child: InteractiveViewer(
-        minScale: 1,
-        maxScale: 5,
-        child: Center(
-          child: Image.network(
-            apiUrl,
-            headers: {'Authorization': 'Bearer $token'},
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) => const Center(
-              child: Icon(Icons.broken_image_outlined, color: Colors.white54, size: 56),
-            ),
-            loadingBuilder: (context, child, progress) {
-              if (progress == null) return child;
-              return const Center(child: CircularProgressIndicator());
-            },
-          ),
+      child: SizedBox.expand(
+        child: InteractiveViewer(
+          minScale: 1,
+          maxScale: 5,
+          child: SizedBox.expand(child: image),
         ),
       ),
     );
@@ -621,7 +541,7 @@ class _VideoViewer extends StatefulWidget {
 }
 
 class _VideoViewerState extends State<_VideoViewer> {
-  late final VideoPlayerController _controller;
+  VideoPlayerController? _controller;
   Future<void>? _initializeFuture;
   double _speed = 1.0;
 
@@ -633,60 +553,48 @@ class _VideoViewerState extends State<_VideoViewer> {
         Uri.parse('${ApiConfig.baseUrl}/photos/${widget.item.cloud!.id}'),
         httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
       );
+      _initializeFuture = _controller!.initialize();
     } else {
-      final fileFuture = widget.item.local!.asset.file;
-      _initializeFuture = fileFuture.then((file) {
-        if (file == null) {
-          throw Exception('Unable to access video file');
-        }
+      _initializeFuture = widget.item.local!.asset.file.then((file) {
+        if (file == null) throw Exception('Unable to access video file');
         _controller = VideoPlayerController.file(file);
-        return _controller.initialize();
+        return _controller!.initialize();
       });
-    }
-    if (widget.item.isCloud) {
-      _initializeFuture = _controller.initialize();
     }
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   Future<void> _seekRelative(int seconds) async {
-    final position = await _controller.position;
-    final duration = _controller.value.duration;
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
+    final position = await controller.position;
+    final duration = controller.value.duration;
     if (position == null) return;
     final target = position + Duration(seconds: seconds);
-    final clamped = target < Duration.zero
-        ? Duration.zero
-        : target > duration
-            ? duration
-            : target;
-    await _controller.seekTo(clamped);
+    final clamped = target < Duration.zero ? Duration.zero : target > duration ? duration : target;
+    await controller.seekTo(clamped);
   }
 
   Future<void> _selectSpeed() async {
+    final controller = _controller;
+    if (controller == null) return;
     final speed = await showModalBottomSheet<double>(
       context: context,
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final value in [0.5, 1.0, 1.5, 2.0])
-              ListTile(
-                title: Text('${value}x'),
-                trailing: _speed == value ? const Icon(Icons.check) : null,
-                onTap: () => Navigator.pop(context, value),
-              ),
-          ],
+          children: [for (final value in [0.5, 1.0, 1.5, 2.0]) ListTile(title: Text('${value}x'), trailing: _speed == value ? const Icon(Icons.check) : null, onTap: () => Navigator.pop(context, value))],
         ),
       ),
     );
     if (speed == null) return;
     setState(() => _speed = speed);
-    await _controller.setPlaybackSpeed(speed);
+    await controller.setPlaybackSpeed(speed);
   }
 
   @override
@@ -694,81 +602,43 @@ class _VideoViewerState extends State<_VideoViewer> {
     return FutureBuilder<void>(
       future: _initializeFuture,
       builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(
-            child: Text(
-              'Unable to play video.',
-              style: TextStyle(color: Colors.white),
-            ),
-          );
-        }
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Center(child: CircularProgressIndicator());
-        }
+        if (snapshot.hasError) return const Center(child: Text('Unable to play video.', style: TextStyle(color: Colors.white)));
+        if (snapshot.connectionState != ConnectionState.done || _controller == null) return const Center(child: CircularProgressIndicator());
 
-        final controller = _controller;
+        final controller = _controller!;
         return Column(
           children: [
-            Expanded(
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio,
-                  child: VideoPlayer(controller),
-                ),
-              ),
-            ),
+            Expanded(child: Center(child: AspectRatio(aspectRatio: controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio, child: VideoPlayer(controller)))),
             ValueListenableBuilder<VideoPlayerValue>(
               valueListenable: controller,
-              builder: (context, value, child) {
-                return Column(
-                  children: [
-                    VideoProgressIndicator(
-                      controller,
-                      allowScrubbing: true,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              builder: (context, value, child) => Column(
+                children: [
+                  VideoProgressIndicator(controller, allowScrubbing: true, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8)),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(onPressed: () => _seekRelative(-10), icon: const Icon(Icons.replay_10, color: Colors.white)),
+                        IconButton(
+                          onPressed: () async {
+                            if (value.isPlaying) {
+                              await controller.pause();
+                            } else {
+                              await controller.play();
+                            }
+                            if (mounted) setState(() {});
+                          },
+                          icon: Icon(value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, color: Colors.white, size: 38),
+                        ),
+                        IconButton(onPressed: () => _seekRelative(10), icon: const Icon(Icons.forward_10, color: Colors.white)),
+                        const SizedBox(width: 10),
+                        TextButton(onPressed: _selectSpeed, child: Text('${_speed}x', style: const TextStyle(color: Colors.white))),
+                      ],
                     ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            onPressed: () => _seekRelative(-10),
-                            icon: const Icon(Icons.replay_10, color: Colors.white),
-                          ),
-                          IconButton(
-                            onPressed: () async {
-                              if (value.isPlaying) {
-                                await controller.pause();
-                              } else {
-                                await controller.play();
-                              }
-                              if (mounted) setState(() {});
-                            },
-                            icon: Icon(
-                              value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
-                              color: Colors.white,
-                              size: 38,
-                            ),
-                          ),
-                          IconButton(
-                            onPressed: () => _seekRelative(10),
-                            icon: const Icon(Icons.forward_10, color: Colors.white),
-                          ),
-                          const SizedBox(width: 10),
-                          TextButton(
-                            onPressed: _selectSpeed,
-                            child: Text(
-                              '${_speed}x',
-                              style: const TextStyle(color: Colors.white),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              },
+                  ),
+                ],
+              ),
             ),
           ],
         );
