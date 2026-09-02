@@ -50,7 +50,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
     final position=_scrollController.position;
     if(position.maxScrollExtent-position.pixels<=_loadMoreThreshold){_loadMoreLocal();}
   }
-  void _syncFastScrollbar(){if(!_scrollController.hasClients||_fastScrolling)return;final max=_scrollController.position.maxScrollExtent;final f=max<=0?0:(_scrollController.offset/max).clamp(0.0,1.0);if((f-_fastScrollFraction).abs()>.002&&mounted)setState(()=>_fastScrollFraction=f);}
+  void _syncFastScrollbar(){if(!_scrollController.hasClients||_fastScrolling)return;final max=_scrollController.position.maxScrollExtent;final double f=max<=0?0.0:(_scrollController.offset/max).clamp(0.0,1.0).toDouble();if((f-_fastScrollFraction).abs()>.002&&mounted)setState(()=>_fastScrollFraction=f);}
 
   Future<void> _loadMedia()async{
     try{
@@ -62,7 +62,6 @@ class _PhotosScreenState extends State<PhotosScreen>{
         setState((){_cloudPhotos=cloud;_localMedia=[];_mediaGroups=_buildGroups(cloud,[]);_hasLocalPermission=false;_hasMoreLocal=false;_isLoading=false;_errorMessage=null;});
         return;
       }
-
       final countFuture=PhotoManager.getAssetCount(type:RequestType.common);
       final cloud=await cloudFuture;
       final total=await countFuture;
@@ -72,22 +71,14 @@ class _PhotosScreenState extends State<PhotosScreen>{
       final groups=_buildGroups(cloud,local);
       if(!mounted)return;
       setState((){
-        _cloudPhotos=cloud;
-        _localMedia=local;
-        _localStart=firstPage.length;
-        _localTotal=total;
-        _hasMoreLocal=_localStart<_localTotal;
-        _mediaGroups=groups;
-        _hasLocalPermission=true;
-        _isLoading=false;
-        _errorMessage=null;
+        _cloudPhotos=cloud;_localMedia=local;_localStart=firstPage.length;_localTotal=total;
+        _hasMoreLocal=_localStart<_localTotal;_mediaGroups=groups;_hasLocalPermission=true;_isLoading=false;_errorMessage=null;
       });
     }catch(_){if(!mounted)return;setState((){_isLoading=false;_errorMessage='Failed to load photos.';});}
   }
 
   List<LocalMedia> _convertAssets(List<AssetEntity> assets)=>[
-    for(final asset in assets)
-      if(!asset.isTrashed)LocalMedia(asset:asset,filename:asset.title??'')
+    for(final asset in assets) if(!asset.isTrashed)LocalMedia(asset:asset,filename:asset.title??'')
   ];
 
   Future<void> _loadMoreLocal()async{
@@ -96,20 +87,11 @@ class _PhotosScreenState extends State<PhotosScreen>{
     try{
       final end=math.min(_localStart+_localPageSize,_localTotal);
       final page=await PhotoManager.getAssetListRange(start:_localStart,end:end,type:RequestType.common);
-      if(page.isEmpty){
-        if(mounted)setState(()=>_hasMoreLocal=false);
-        return;
-      }
-      final newLocal=_convertAssets(page);
-      final merged=[..._localMedia,...newLocal];
-      final groups=_buildGroups(_cloudPhotos,merged);
+      if(page.isEmpty){if(mounted)setState(()=>_hasMoreLocal=false);return;}
+      final newLocal=_convertAssets(page);final merged=[..._localMedia,...newLocal];final groups=_buildGroups(_cloudPhotos,merged);
       if(!mounted)return;
-      setState((){
-        _localMedia=merged;
-        _localStart+=page.length;
-        _hasMoreLocal=_localStart<_localTotal;
-        _mediaGroups=groups;
-      });
+      setState(()=>_localMedia=merged..sort((a,b)=>b.createdAt.compareTo(a.createdAt)));
+      setState((){_localStart+=page.length;_hasMoreLocal=_localStart<_localTotal;_mediaGroups=groups;});
     }catch(_){
       // Keep the already visible library usable. A later scroll can retry.
     }finally{if(mounted)setState(()=>_isLoadingMoreLocal=false);}
@@ -140,13 +122,11 @@ class _PhotosScreenState extends State<PhotosScreen>{
       final rows=(list.length/_crossAxisCount).ceil();
       final groupHeight=_headerExtent+rows*tile+(rows>0?math.max(0,rows-1)*2:0);
       if(offset<cursor+groupHeight){
-        final groupOffset=(offset-cursor).clamp(0.0,groupHeight);
-        if(groupOffset<_headerExtent||list.isEmpty){
-          return _Anchor(date,0,groupOffset,true);
-        }
+        final groupOffset=(offset-cursor).clamp(0.0,groupHeight).toDouble();
+        if(groupOffset<_headerExtent||list.isEmpty)return _Anchor(date,0,groupOffset,true);
         final inside=groupOffset-_headerExtent;
-        final row=(inside/(tile+2)).floor().clamp(0,math.max(0,rows-1));
-        final item=(row*_crossAxisCount).clamp(0,math.max(0,list.length-1));
+        final int row=(inside/(tile+2)).floor().clamp(0,math.max(0,rows-1));
+        final int item=(row*_crossAxisCount).clamp(0,math.max(0,list.length-1));
         return _Anchor(date,item,inside-row*(tile+2),false);
       }
       cursor+=groupHeight;
@@ -166,7 +146,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
       if(anchor.date==date){
         if(anchor.inHeader)return cursor+anchor.inTileOffset.clamp(0.0,_headerExtent);
         if(list.isEmpty)return cursor;
-        final local=anchor.localIndex.clamp(0,list.length-1);
+        final int local=anchor.localIndex.clamp(0,list.length-1);
         final row=local~/columns;
         return cursor+_headerExtent+row*(tile+2)+anchor.inTileOffset.clamp(0.0,tile);
       }
@@ -180,7 +160,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
   void _pointerUp(PointerEvent e){_pointers.remove(e.pointer);if(_pointers.length<2&&_isPinching){_pinchStartDistance=null;_pinchDirectionLocked=false;setState(()=>_isPinching=false);}}
   double _distanceBetweenPointers(){if(_pointers.length<2)return 0;final v=_pointers.values.toList();final dx=v[0].dx-v[1].dx,dy=v[0].dy-v[1].dy;return math.sqrt(dx*dx+dy*dy);}
 
-  void _fastScrollToFraction(double fraction){if(!_scrollController.hasClients)return;final f=fraction.clamp(0.0,1.0);final max=_scrollController.position.maxScrollExtent;_scrollController.jumpTo((f*max).clamp(0.0,max));final dates=_mediaGroups.keys.toList()..sort((a,b)=>b.compareTo(a));if(dates.isNotEmpty){final idx=((dates.length-1)*f).round();setState(()=>_fastScrollDate=dates[idx]);}}
+  void _fastScrollToFraction(double fraction){if(!_scrollController.hasClients)return;final double f=fraction.clamp(0.0,1.0).toDouble();final max=_scrollController.position.maxScrollExtent;_scrollController.jumpTo((f*max).clamp(0.0,max));final dates=_mediaGroups.keys.toList()..sort((a,b)=>b.compareTo(a));if(dates.isNotEmpty){final idx=((dates.length-1)*f).round();setState(()=>_fastScrollDate=dates[idx]);}}
   String _dateLabel(DateTime date){final now=DateTime.now(),today=DateTime(now.year,now.month,now.day),yesterday=today.subtract(const Duration(days:1));if(date==today)return'Today';if(date==yesterday)return'Yesterday';const m=['January','February','March','April','May','June','July','August','September','October','November','December'];return date.year==today.year?'${m[date.month-1]} ${date.day}':'${m[date.month-1]} ${date.day}, ${date.year}';}
   String _keyFor(_MediaItem i)=>i.isCloud?'cloud:${i.cloud!.id}':'local:${i.local!.asset.id}';
   bool _isSelected(_MediaItem i)=>_selectedKeys.contains(_keyFor(i));
@@ -198,7 +178,23 @@ class _PhotosScreenState extends State<PhotosScreen>{
   Future<void> _openTrash()async{await Navigator.of(context).push(MaterialPageRoute(builder:(_)=>TrashScreen(token:widget.token)));if(mounted)await _refresh();}
   Future<void> _openUploadPhotos()async{final uploaded=await Navigator.of(context).push<bool>(MaterialPageRoute(builder:(_)=>UploadPhotosScreen(token:widget.token)));if(uploaded==true&&mounted)await _refresh();}
 
-  @override Widget build(BuildContext context)=>Scaffold(appBar:AppBar(leading:_isSelectionMode?IconButton(icon:const Icon(Icons.close),onPressed:_clearSelection):null,title:_isSelectionMode?Text('${_selectedKeys.length} selected'):const Text('Photos'),actions:_isSelectionMode?[if(_isActionRunning)const Padding(padding:EdgeInsets.symmetric(horizontal:16),child:Center(child:SizedBox(width:20,height:20,child:CircularProgressIndicator(strokeWidth:2)))),if(!_isActionRunning)IconButton(tooltip:'Select all',icon:const Icon(Icons.select_all),onPressed:_selectAll),if(!_isActionRunning)IconButton(tooltip:'Add to album',icon:const Icon(Icons.add_to_photos_outlined),onPressed:_addSelectedToAlbum),if(!_isActionRunning)IconButton(tooltip:'Move cloud photos to Trash',icon:const Icon(Icons.delete_outline),onPressed:_moveSelectedToTrash)]:[IconButton(tooltip:'Refresh',icon:const Icon(Icons.refresh),onPressed:_refresh),IconButton(tooltip:'Trash',icon:const Icon(Icons.delete_outline),onPressed:_openTrash)],floatingActionButton:_isSelectionMode?null:FloatingActionButton(onPressed:_openUploadPhotos,child:const Icon(Icons.add)),body:_buildBody());
+  @override Widget build(BuildContext context)=>Scaffold(
+    appBar:AppBar(
+      leading:_isSelectionMode?IconButton(icon:const Icon(Icons.close),onPressed:_clearSelection):null,
+      title:_isSelectionMode?Text('${_selectedKeys.length} selected'):const Text('Photos'),
+      actions:_isSelectionMode?[
+        if(_isActionRunning)const Padding(padding:EdgeInsets.symmetric(horizontal:16),child:Center(child:SizedBox(width:20,height:20,child:CircularProgressIndicator(strokeWidth:2)))),
+        if(!_isActionRunning)IconButton(tooltip:'Select all',icon:const Icon(Icons.select_all),onPressed:_selectAll),
+        if(!_isActionRunning)IconButton(tooltip:'Add to album',icon:const Icon(Icons.add_to_photos_outlined),onPressed:_addSelectedToAlbum),
+        if(!_isActionRunning)IconButton(tooltip:'Move cloud photos to Trash',icon:const Icon(Icons.delete_outline),onPressed:_moveSelectedToTrash)
+      ]:[
+        IconButton(tooltip:'Refresh',icon:const Icon(Icons.refresh),onPressed:_refresh),
+        IconButton(tooltip:'Trash',icon:const Icon(Icons.delete_outline),onPressed:_openTrash)
+      ]
+    ),
+    floatingActionButton:_isSelectionMode?null:FloatingActionButton(onPressed:_openUploadPhotos,child:const Icon(Icons.add)),
+    body:_buildBody()
+  );
 
   Widget _buildBody(){
     if(_isLoading)return const Center(child:CircularProgressIndicator());
@@ -215,8 +211,8 @@ class _PhotosScreenState extends State<PhotosScreen>{
         if(_isLoadingMoreLocal)const SliverToBoxAdapter(child:Padding(padding:EdgeInsets.all(18),child:Center(child:SizedBox(width:22,height:22,child:CircularProgressIndicator(strokeWidth:2))))),
         const SliverToBoxAdapter(child:SizedBox(height:24))
       ]))),
-      Positioned(right:0,top:0,bottom:0,width:44,child:LayoutBuilder(builder:(context,box){final track=box.maxHeight;final travel=math.max(1.0,track-_fastThumbHeight);final thumbTop=_fastScrollFraction*travel;return GestureDetector(behavior:HitTestBehavior.translucent,onVerticalDragStart:(_){setState(()=>_fastScrolling=true);},onVerticalDragUpdate:(d){final f=((d.localPosition.dy-_fastThumbHeight/2)/travel).clamp(0.0,1.0);_fastScrollFraction=f;_fastScrollToFraction(f);},onVerticalDragEnd:(_){setState(()=>_fastScrolling=false);},child:Stack(children:[Positioned(top:thumbTop,right:6,child:Container(width:7,height:_fastThumbHeight,decoration:BoxDecoration(color:Theme.of(context).colorScheme.onSurface.withValues(alpha:.55),borderRadius:BorderRadius.circular(8))))]));})),
-      if(_fastScrolling&&_fastScrollDate!=null)Positioned(right:50,top:MediaQuery.sizeOf(context).height*.42,child:Material(color:Colors.black87,borderRadius:BorderRadius.circular(10),child:Padding(padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),child:Text(_dateLabel(_fastScrollDate!),style:const TextStyle(color:Colors.white,fontWeight:FontWeight.w600))))
+      Positioned(right:0,top:0,bottom:0,width:44,child:LayoutBuilder(builder:(context,box){final track=box.maxHeight;final travel=math.max(1.0,track-_fastThumbHeight);final thumbTop=_fastScrollFraction*travel;return GestureDetector(behavior:HitTestBehavior.translucent,onVerticalDragStart:(_){setState(()=>_fastScrolling=true);},onVerticalDragUpdate:(d){final double f=((d.localPosition.dy-_fastThumbHeight/2)/travel).clamp(0.0,1.0).toDouble();_fastScrollFraction=f;_fastScrollToFraction(f);},onVerticalDragEnd:(_){setState(()=>_fastScrolling=false);},child:Stack(children:[Positioned(top:thumbTop,right:6,child:Container(width:7,height:_fastThumbHeight,decoration:BoxDecoration(color:Theme.of(context).colorScheme.onSurface.withValues(alpha:.55),borderRadius:BorderRadius.circular(8))))]));})),
+      if(_fastScrolling&&_fastScrollDate!=null)Positioned(right:50,top:MediaQuery.sizeOf(context).height*.42,child:Material(color:Colors.black87,borderRadius:BorderRadius.circular(10),child:Padding(padding:const EdgeInsets.symmetric(horizontal:12,vertical:8),child:Text(_dateLabel(_fastScrollDate!),style:const TextStyle(color:Colors.white,fontWeight:FontWeight.w600)))))
     ]));
   }
 
