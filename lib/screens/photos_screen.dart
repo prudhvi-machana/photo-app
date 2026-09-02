@@ -36,6 +36,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
   int _pinchStartColumns=3;
   double _lastPinchRatio=1;
   static const double _pinchThreshold=.10;
+  int _pinchAnchorVersion=0;
   final Set<String> _selectedKeys={};
   final ValueNotifier<double> _fastScrollFraction=ValueNotifier(0);
   final ValueNotifier<DateTime?> _fastScrollDate=ValueNotifier(null);
@@ -124,19 +125,24 @@ class _PhotosScreenState extends State<PhotosScreen>{
     final dates=_mediaGroups.keys.toList()..sort((a,b)=>b.compareTo(a));
     for(final date in dates){
       final list=_mediaGroups[date]!;
-      final groupStart=cursor;
-      final gridY=contentY-groupStart-_headerExtent;
-      if(gridY<=0){
-        if(list.isNotEmpty)return _Anchor(_keyFor(list.first),date,0);
-        return _Anchor(null,date,0);
-      }
-      final rowHeight=tile+spacing;
-      final row=math.min(list.isEmpty?0:(list.length-1)~/_crossAxisCount,(gridY/rowHeight).floor());
-      final index=math.min(row*_crossAxisCount,math.max(0,list.length-1));
-      final rowOffset=(gridY-row*rowHeight).clamp(0.0,tile).toDouble();
-      if(list.isNotEmpty)return _Anchor(_keyFor(list[index]),date,rowOffset);
       final rows=(list.length/_crossAxisCount).ceil();
-      cursor+=_headerExtent+rows*rowHeight;
+      final rowHeight=tile+spacing;
+      final groupHeight=_headerExtent+rows*rowHeight;
+      final groupOffset=contentY-cursor;
+      if(groupOffset<groupHeight){
+        if(groupOffset<_headerExtent){
+          return _Anchor(null,date,groupOffset.clamp(0.0,_headerExtent).toDouble(),isHeader:true);
+        }
+        if(list.isEmpty)return _Anchor(null,date,groupOffset.clamp(0.0,groupHeight).toDouble());
+        final gridY=groupOffset-_headerExtent;
+        final row=math.min(rows-1,math.max(0,(gridY/rowHeight).floor()));
+        final gridX=(viewport.dx-2).clamp(0.0,math.max(0.0,width-4)).toDouble();
+        final column=math.min(_crossAxisCount-1,math.max(0,(gridX/rowHeight).floor()));
+        final index=math.min(row*_crossAxisCount+column,list.length-1);
+        final rowOffset=(gridY-row*rowHeight).clamp(0.0,tile).toDouble();
+        return _Anchor(_keyFor(list[index]),date,rowOffset);
+      }
+      cursor+=groupHeight;
     }
     return const _Anchor(null,null,0);
   }
@@ -151,17 +157,20 @@ class _PhotosScreenState extends State<PhotosScreen>{
     for(final date in dates){
       final list=_mediaGroups[date]!;
       final rows=(list.length/columns).ceil();
+      final rowHeight=tile+spacing;
+      final groupHeight=_headerExtent+rows*rowHeight;
       if(anchor.date==date){
+        if(anchor.isHeader)return cursor+anchor.offset;
         if(anchor.itemKey!=null){
           final index=list.indexWhere((item)=>_keyFor(item)==anchor.itemKey);
           if(index>=0){
             final row=index~/columns;
-            return cursor+_headerExtent+row*(tile+spacing)+anchor.rowOffset;
+            return cursor+_headerExtent+row*rowHeight+anchor.offset;
           }
         }
-        return cursor+anchor.rowOffset;
+        return cursor+anchor.offset;
       }
-      cursor+=_headerExtent+rows*(tile+spacing);
+      cursor+=groupHeight;
     }
     return cursor;
   }
@@ -203,8 +212,10 @@ class _PhotosScreenState extends State<PhotosScreen>{
     if(next==_crossAxisCount)return;
     final viewport=_pinchViewport();
     final anchor=_captureAnchorAtViewport(viewport);
+    final version=++_pinchAnchorVersion;
     setState(()=>_crossAxisCount=next);
     WidgetsBinding.instance.addPostFrameCallback((_){
+      if(version!=_pinchAnchorVersion)return;
       if(!mounted||!_scrollController.hasClients||anchor.date==null)return;
       final contentTarget=_contentOffsetForAnchor(anchor,next);
       final target=(contentTarget-viewport.dy).clamp(0.0,_scrollController.position.maxScrollExtent).toDouble();
@@ -217,6 +228,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
     if(_pointers.length<2&&_isPinching){
       _pinchStartDistance=null;
       _pinchDirectionLocked=false;
+      ++_pinchAnchorVersion;
       setState(()=>_isPinching=false);
     }
   }
@@ -277,7 +289,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
           SliverToBoxAdapter(child:SizedBox(height:_headerExtent,child:Padding(padding:const EdgeInsets.fromLTRB(12,14,12,8),child:Text(_dateLabel(date),style:Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight:FontWeight.w600))))),
           SliverPadding(padding:const EdgeInsets.symmetric(horizontal:2),sliver:SliverGrid(delegate:SliverChildBuilderDelegate((context,index)=>_buildMediaTile(_mediaGroups[date]![index]),childCount:_mediaGroups[date]!.length),gridDelegate:SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:_crossAxisCount,crossAxisSpacing:2,mainAxisSpacing:2,childAspectRatio:1)))
         ],
-        if(_isLoadingMoreLocal)const SliverToBoxAdapter(child:Padding(padding:EdgeInsets.all(18),child:Center(child:SizedBox(width:22,height:22,child:CircularProgressIndicator(strokeWidth:2))))),
+        if(_isLoadingMoreLocal)const SliverToBoxAdapter(child:Padding(padding:EdgeInsets.all(18),child:Center(child:SizedBox(width:22,height:22,child:CircularProgressIndicator(strokeWidth:2)))),
         const SliverToBoxAdapter(child:SizedBox(height:24))
       ])),
       Positioned(
@@ -301,22 +313,20 @@ class _PhotosScreenState extends State<PhotosScreen>{
                     _fastScrollToFraction(f);
                   },
                   onVerticalDragEnd:(_){setState(()=>_fastScrolling=false);},
-                  child:Stack(
-                    children:[
-                      Positioned(
-                        top:thumbTop,
-                        right:6,
-                        child:Container(
-                          width:7,
-                          height:_fastThumbHeight,
-                          decoration:BoxDecoration(
-                            color:Theme.of(context).colorScheme.onSurface.withValues(alpha:.55),
-                            borderRadius:BorderRadius.circular(8),
-                          ),
+                  child:Stack(children:[
+                    Positioned(
+                      top:thumbTop,
+                      right:6,
+                      child:Container(
+                        width:7,
+                        height:_fastThumbHeight,
+                        decoration:BoxDecoration(
+                          color:Theme.of(context).colorScheme.onSurface.withValues(alpha:.55),
+                          borderRadius:BorderRadius.circular(8),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ]),
                 );
               },
             );
@@ -330,10 +340,13 @@ class _PhotosScreenState extends State<PhotosScreen>{
   Widget _buildMediaTile(_MediaItem item){final selected=_isSelected(item);Widget image;if(item.isCloud)image=PhotoThumbnail(photo:item.cloud!,token:widget.token);else{final l=item.local!;image=Stack(fit:StackFit.expand,children:[AssetEntityImage(l.asset,isOriginal:false,thumbnailSize:const ThumbnailSize.square(240),thumbnailFormat:ThumbnailFormat.jpeg,fit:BoxFit.cover),if(l.isVideo)const Positioned(right:8,bottom:8,child:Icon(Icons.play_circle_fill,color:Colors.white,size:28))]);}return GestureDetector(onTap:()=>_handleTap(item),onLongPress:()=>_enterSelection(item),child:Stack(fit:StackFit.expand,children:[image,if(item.isCloud)_buildStatusBadge(local:item.alsoLocal,cloud:true)else _buildStatusBadge(local:true,cloud:item.local!.alsoInCloud),if(selected)Container(color:Theme.of(context).colorScheme.primary.withValues(alpha:.38),child:Align(alignment:Alignment.topLeft,child:Container(margin:const EdgeInsets.all(6),decoration:BoxDecoration(color:Theme.of(context).colorScheme.primary,shape:BoxShape.circle),padding:const EdgeInsets.all(2),child:const Icon(Icons.check,color:Colors.white,size:18))))]));}
   Widget _buildStatusBadge({required bool local,required bool cloud}){final icon=local&&cloud?Icons.cloud_done:cloud?Icons.cloud_done:Icons.smartphone;final label=local&&cloud?'On device + cloud':cloud?'Cloud':'On device';return Positioned(top:5,right:5,child:Tooltip(message:label,child:Container(padding:const EdgeInsets.all(5),decoration:BoxDecoration(color:Colors.black.withValues(alpha:.62),shape:BoxShape.circle),child:Icon(icon,color:Colors.white,size:16))));}
 }
+
 class _Anchor{
   final String? itemKey;
   final DateTime? date;
-  final double rowOffset;
-  const _Anchor(this.itemKey,this.date,this.rowOffset);
+  final double offset;
+  final bool isHeader;
+  const _Anchor(this.itemKey,this.date,this.offset,{this.isHeader=false});
 }
+
 class _MediaItem{final Photo? cloud;final LocalMedia? local;final bool alsoLocal;const _MediaItem._({this.cloud,this.local,this.alsoLocal=false});factory _MediaItem.cloud(Photo p,{required bool alsoLocal})=>_MediaItem._(cloud:p,alsoLocal:alsoLocal);factory _MediaItem.local(LocalMedia m)=>_MediaItem._(local:m);bool get isCloud=>cloud!=null;DateTime get date=>isCloud?DateTime.parse(cloud!.uploadedAt).toLocal():local!.createdAt;}
