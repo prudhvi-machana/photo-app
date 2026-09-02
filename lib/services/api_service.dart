@@ -66,6 +66,23 @@ class ApiService {
     return data.map((json) => Photo.fromJson(json)).toList();
   }
 
+  Future<List<Photo>> getFavoritePhotos() async {
+    final response = await http.get(Uri.parse('$baseUrl/photos/favorites'), headers: _headers);
+    if (response.statusCode != 200) throw Exception('Failed to load favorite photos');
+    final List<dynamic> data = jsonDecode(response.body);
+    return data.map((json) => Photo.fromJson(json)).toList();
+  }
+
+  Future<bool> setFavorite(int photoId, bool favorite) async {
+    final response = favorite
+        ? await http.post(Uri.parse('$baseUrl/photos/$photoId/favorite'), headers: _headers)
+        : await http.delete(Uri.parse('$baseUrl/photos/$photoId/favorite'), headers: _headers);
+    if (response.statusCode != 200 && response.statusCode != 201 && response.statusCode != 204) {
+      throw Exception('Failed to update favorite: ${response.statusCode}');
+    }
+    return favorite;
+  }
+
   Future<List<Photo>> getAlbumPhotos(int albumId) async {
     final response = await http.get(Uri.parse('$baseUrl/albums/$albumId/photos'), headers: _headers);
     if (response.statusCode != 200) throw Exception('Failed to load album photos');
