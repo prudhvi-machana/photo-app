@@ -7,7 +7,6 @@ import '../models/local_media.dart';
 import '../models/photo.dart';
 import '../services/api_service.dart';
 import '../widgets/photo_thumbnail.dart';
-import 'local_media_viewer_screen.dart';
 import 'photo_viewer_screen.dart';
 import 'trash_screen.dart';
 import 'upload_photos_screen.dart';
@@ -261,16 +260,11 @@ class _PhotosScreenState extends State<PhotosScreen>{
     final viewport=_pinchViewport();
     final anchor=_captureAnchorAtViewport(viewport);
     final version=++_pinchAnchorVersion;
-
-    // Move the old grid to the predicted new position before the new layout
-    // is painted. The rendered-widget correction below then removes any
-    // remaining sub-pixel/layout difference without a visible date flash.
     if(_scrollController.hasClients&&anchor.date!=null){
       final predictedContentOffset=_contentOffsetForAnchor(anchor,next);
       final predictedTarget=(predictedContentOffset-viewport.dy).clamp(0.0,_scrollController.position.maxScrollExtent).toDouble();
       if((predictedTarget-_scrollController.offset).abs()>.1)_scrollController.jumpTo(predictedTarget);
     }
-
     setState(()=>_crossAxisCount=next);
     _schedulePinchCorrection(anchor,next,version);
   }
@@ -306,8 +300,8 @@ class _PhotosScreenState extends State<PhotosScreen>{
 
   Future<void> _moveSelectedToTrash()async{final selected=_selectedCloudPhotos;if(selected.isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Only cloud photos can be moved to Trash.')));return;}final c=selected.length,t=_selectedKeys.length;final ok=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Move to Trash?'),content:Text('Move $c cloud ${c==1?'photo':'photos'} out of $t selected ${t==1?'file':'files'} to Trash? You can restore them for 30 days.'),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('Move to Trash'))]));if(ok!=true)return;setState(()=>_isActionRunning=true);var s=0,f=0;for(final p in selected){try{await _apiService.movePhotoToTrash(p.id);s++;}catch(_){f++;}}if(!mounted)return;setState(()=>_isActionRunning=false);_clearSelection();await _refresh();if(!mounted)return;ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(f==0?'$s photo${s==1?'':'s'} moved to Trash.':'$s moved, $f failed.')));}
   Future<void> _addSelectedToAlbum()async{final selected=_selectedCloudPhotos;if(selected.isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Only cloud photos can be added to albums.')));return;}setState(()=>_isActionRunning=true);List<Album> albums;try{albums=await _apiService.getAlbums();}catch(e){if(!mounted)return;setState(()=>_isActionRunning=false);ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('Failed to load albums: $e')));return;}if(!mounted)return;setState(()=>_isActionRunning=false);if(albums.isEmpty){ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('No albums available.')));return;}final album=await showDialog<Album>(context:context,builder:(ctx)=>AlertDialog(title:const Text('Add to album'),content:SizedBox(width:double.maxFinite,height:math.min(360,albums.length*56.0),child:ListView.builder(itemCount:albums.length,itemBuilder:(_,i){final a=albums[i];return ListTile(leading:const Icon(Icons.photo_album_outlined),title:Text(a.name),onTap:()=>Navigator.pop(ctx,a));})),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Cancel'))]));if(album==null||!mounted)return;setState(()=>_isActionRunning=true);var added=0,already=0,failed=0;for(final p in selected){try{await _apiService.addPhotoToAlbum(album.id,p.id);added++;}catch(e){if(e.toString().contains('409'))already++;else failed++;}}if(!mounted)return;setState(()=>_isActionRunning=false);_clearSelection();ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(failed==0&&already==0?'$added photo${added==1?'':'s'} added to "${album.name}".':'$added added, $already already there, $failed failed.')));}
-  void _openCloudPhoto(Photo p)=>Navigator.of(context).push(MaterialPageRoute(builder:(_)=>PhotoViewerScreen(photos:_cloudPhotos,initialIndex:_cloudPhotos.indexOf(p),token:widget.token)));
-  void _openLocalPhoto(LocalMedia m)=>Navigator.of(context).push(MaterialPageRoute(builder:(_)=>LocalMediaViewerScreen(asset:m.asset)));
+  void _openCloudPhoto(Photo p)=>Navigator.of(context).push(MaterialPageRoute(builder:(_)=>PhotoViewerScreen(photos:_cloudPhotos,localMedia:_localMedia,initialIndex:_cloudPhotos.indexOf(p),token:widget.token)));
+  void _openLocalPhoto(LocalMedia m)=>Navigator.of(context).push(MaterialPageRoute(builder:(_)=>PhotoViewerScreen(photos:_cloudPhotos,localMedia:_localMedia,initialIndex:0,initialLocalAsset:m.asset,token:widget.token)));
   Future<void> _openTrash()async{await Navigator.of(context).push(MaterialPageRoute(builder:(_)=>TrashScreen(token:widget.token)));if(mounted)await _refresh();}
   Future<void> _openUploadPhotos()async{final uploaded=await Navigator.of(context).push<bool>(MaterialPageRoute(builder:(_)=>UploadPhotosScreen(token:widget.token)));if(uploaded==true&&mounted)await _refresh();}
 
