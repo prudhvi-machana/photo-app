@@ -14,7 +14,6 @@ class AlbumPhotosScreen extends StatefulWidget {
   const AlbumPhotosScreen({super.key,this.albumId,required this.albumName,required this.token,this.isRecent=false}) : assert(isRecent || albumId != null,'albumId is required for a normal album');
   @override State<AlbumPhotosScreen> createState()=>_AlbumPhotosScreenState();
 }
-
 class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
   final ApiService _apiService=ApiService();
   final ScrollController _scrollController=ScrollController();
@@ -30,6 +29,9 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
   int? _swipeStartIndex;
   Offset? _swipePointerStart;
   bool _swipeDidMove=false;
+  Set<int> _swipeBaselineSelection={};
+  String? _swipeGestureMode;
+  static const double _selectionDirectionRatio=1.20;
   static const double _pinchThreshold=.10;
 
   @override void initState(){super.initState();_apiService.setToken(widget.token);_loadPhotos();}
@@ -55,7 +57,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
 
   void _startSelection(Photo photo){
     final index=_photos.indexOf(photo);
-    setState((){_isSelectionMode=true;_isSwipeSelecting=true;_swipeStartIndex=index<0?null:index;_swipePointerStart=_pointers.isEmpty?null:_pointers.values.first;_swipeDidMove=false;_selectedPhotoIds.add(photo.id);});
+    setState((){_isSelectionMode=true;_isSwipeSelecting=false;_swipeStartIndex=index<0?null:index;_swipePointerStart=_pointers.isEmpty?null:_pointers.values.first;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection=Set<int>.from(_selectedPhotoIds);_selectedPhotoIds.add(photo.id);});
   }
 
   void _toggleSelection(Photo photo){
@@ -73,7 +75,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     });
   }
 
-  void _clearSelection(){setState((){_selectedPhotoIds.clear();_isSelectionMode=false;_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;});}
+  void _clearSelection(){setState((){_selectedPhotoIds.clear();_isSelectionMode=false;_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection.clear();});}
 
   int? _indexAt(Offset globalPosition){
     for(var i=0;i<_photos.length;i++){
@@ -85,37 +87,38 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     return null;
   }
 
-  void _selectSwipeRange(int from,int to){
-    if(_photos.isEmpty)return;
+  Set<int> _swipeRangeIndices(int from,int to){
+    final result=<int>{};
     final a=math.min(from,to),b=math.max(from,to);
-    final startRow=from~/_crossAxisCount;
-    final endRow=to~/_crossAxisCount;
-    final firstRowStart=startRow*_crossAxisCount;
-    final firstRowEnd=math.min(_photos.length-1,(startRow+1)*_crossAxisCount-1);
-    final lastRowStart=endRow*_crossAxisCount;
-    final lastRowEnd=math.min(_photos.length-1,(endRow+1)*_crossAxisCount-1);
-    final selected=Set<int>.from(_selectedPhotoIds);
-    if(startRow==endRow){
-      for(var i=a;i<=b;i++)selected.add(_photos[i].id);
+    final startRow=from~/_crossAxisCount,endRow=to~/_crossAxisCount;
+    if(startRow==endRow){for(var i=a;i<=b;i++)result.add(i);return result;}
+    if(from<to){
+      final firstEnd=math.min(_photos.length-1,(startRow+1)*_crossAxisCount-1);
+      for(var i=from;i<=firstEnd;i++)result.add(i);
+      for(var row=startRow+1;row<endRow;row++){final s=row*_crossAxisCount,e=math.min(_photos.length-1,s+_crossAxisCount-1);for(var i=s;i<=e;i++)result.add(i);}
+      final lastStart=endRow*_crossAxisCount;for(var i=lastStart;i<=to;i++)result.add(i);
     }else{
-      final lowFrom=from<to?from:firstRowStart;
-      final lowTo=from<to?firstRowEnd:from;
-      for(var i=lowFrom;i<=lowTo;i++)selected.add(_photos[i].id);
-      for(var row=math.min(startRow,endRow)+1;row<math.max(startRow,endRow);row++){
-        final rs=row*_crossAxisCount,re=math.min(_photos.length-1,(row+1)*_crossAxisCount-1);
-        for(var i=rs;i<=re;i++)selected.add(_photos[i].id);
-      }
-      final highFrom=from<to?lastRowStart:to;
-      final highTo=from<to?to:lastRowEnd;
-      for(var i=highFrom;i<=highTo;i++)selected.add(_photos[i].id);
+      final firstStart=startRow*_crossAxisCount;for(var i=firstStart;i<=from;i++)result.add(i);
+      for(var row=startRow-1;row>endRow;row--){final s=row*_crossAxisCount,e=math.min(_photos.length-1,s+_crossAxisCount-1);for(var i=s;i<=e;i++)result.add(i);}
+      final lastEnd=math.min(_photos.length-1,(endRow+1)*_crossAxisCount-1);for(var i=to;i<=lastEnd;i++)result.add(i);
     }
-    if(selected.length!=_selectedPhotoIds.length)setState(()=>_selectedPhotoIds.addAll(selected));
+    return result;
+  }
+
+  void _applySwipeSelection(int currentIndex){
+    if(_swipeStartIndex==null)return;
+    final range=_swipeRangeIndices(_swipeStartIndex!,currentIndex);
+    if(range.isEmpty)return;
+    final next=Set<int>.from(_swipeBaselineSelection);
+    for(final index in range){final id=_photos[index].id;if(next.contains(id))next.remove(id);else next.add(id);}
+    setState((){_selectedPhotoIds..clear()..addAll(next);});
   }
 
   void _pointerDown(PointerDownEvent event){
     _pointers[event.pointer]=event.position;
     if(_pointers.length==2){
       _isSwipeSelecting=false;
+      _swipeGestureMode=null;
       _pinchStartDistance=_distanceBetweenPointers();
       _pinchStartColumns=_crossAxisCount;
       _lastPinchRatio=1;
@@ -124,7 +127,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     }
     if(_isSelectionMode&&!_isPinching){
       final index=_indexAt(event.position);
-      if(index!=null){_swipeStartIndex=index;_swipePointerStart=event.position;_swipeDidMove=false;}
+      if(index!=null){_swipeStartIndex=index;_swipePointerStart=event.position;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection=Set<int>.from(_selectedPhotoIds);}
     }
   }
 
@@ -150,19 +153,26 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
       });
       return;
     }
-    if(_isSelectionMode&&!_isPinching&&_swipeStartIndex!=null&&_swipePointerStart!=null){
-      if((event.position-_swipePointerStart!).distance>6)_swipeDidMove=true;
-      if(_swipeDidMove){
-        final index=_indexAt(event.position);
-        if(index!=null){_isSwipeSelecting=true;_selectSwipeRange(_swipeStartIndex!,index);}
-      }
+    if(!_isSelectionMode||_isPinching||_swipeStartIndex==null||_swipePointerStart==null)return;
+    final delta=event.position-_swipePointerStart!;
+    if(delta.distance<=6)return;
+    _swipeDidMove=true;
+    if(_swipeGestureMode==null){
+      final horizontal=delta.dx.abs(),vertical=delta.dy.abs();
+      _swipeGestureMode=vertical>horizontal*_selectionDirectionRatio?'scroll':'select';
+      if(_swipeGestureMode=='scroll'){_isSwipeSelecting=false;return;}
     }
+    if(_swipeGestureMode!='select')return;
+    final index=_indexAt(event.position);
+    if(index!=null){_isSwipeSelecting=true;_applySwipeSelection(index);}
   }
 
   void _pointerUp(PointerEvent event){
+    final wasSelecting=_swipeGestureMode=='select'&&_swipeDidMove&&_swipeStartIndex!=null;
+    if(wasSelecting){final index=_indexAt(event.position);if(index!=null)_applySwipeSelection(index);}
     _pointers.remove(event.pointer);
     if(_pointers.length<2&&_isPinching){_pinchStartDistance=null;setState(()=>_isPinching=false);}
-    if(_pointers.isEmpty){_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;_swipeDidMove=false;}
+    if(_pointers.isEmpty){_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection.clear();}
   }
 
   double _distanceBetweenPointers(){if(_pointers.length<2)return 0;final v=_pointers.values.toList();final dx=v[0].dx-v[1].dx,dy=v[0].dy-v[1].dy;return math.sqrt(dx*dx+dy*dy);}
@@ -243,7 +253,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     if(_isLoading)return const Center(child:CircularProgressIndicator());
     if(_errorMessage!=null)return Center(child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[Text(_errorMessage!),const SizedBox(height:16),FilledButton(onPressed:(){setState(()=>_isLoading=true);_loadPhotos();},child:const Text('Retry'))]));
     if(_photos.isEmpty)return RefreshIndicator(onRefresh:_loadPhotos,child:ListView(physics:const AlwaysScrollableScrollPhysics(),children:[const SizedBox(height:180),Icon(Icons.photo_album_outlined,size:64),const SizedBox(height:16),Center(child:Text(widget.isRecent?'No recent photos':'This album is empty',style:const TextStyle(fontSize:20,fontWeight:FontWeight.w500)))]));
-    return Listener(behavior:HitTestBehavior.translucent,onPointerDown:_pointerDown,onPointerMove:_pointerMove,onPointerUp:_pointerUp,onPointerCancel:_pointerUp,child:RefreshIndicator(onRefresh:_loadPhotos,child:GridView.builder(controller:_scrollController,physics:_isPinching||_isSwipeSelecting?const NeverScrollableScrollPhysics():const AlwaysScrollableScrollPhysics(),padding:const EdgeInsets.all(4),itemCount:_photos.length,gridDelegate:SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:_crossAxisCount,crossAxisSpacing:4,mainAxisSpacing:4),itemBuilder:(context,index){final photo=_photos[index];final selected=_selectedPhotoIds.contains(photo.id);return GestureDetector(key:_tileKey(index),onTap:()=>_openPhoto(photo,index),onLongPress:()=>_startSelection(photo),child:Stack(fit:StackFit.expand,children:[ClipRRect(borderRadius:BorderRadius.circular(6),child:PhotoThumbnail(photo:photo,token:widget.token)),if(selected)Container(decoration:BoxDecoration(color:Colors.black.withValues(alpha:.35),border:Border.all(color:Theme.of(context).colorScheme.primary,width:3),borderRadius:BorderRadius.circular(6))),if(_isSelectionMode)Positioned(top:6,right:6,child:Container(width:25,height:25,decoration:BoxDecoration(shape:BoxShape.circle,color:selected?Theme.of(context).colorScheme.primary:Colors.black.withValues(alpha:.45),border:Border.all(color:Colors.white,width:2)),child:selected?const Icon(Icons.check,size:17,color:Colors.white):null))]));})));
+    return Listener(behavior:HitTestBehavior.translucent,onPointerDown:_pointerDown,onPointerMove:_pointerMove,onPointerUp:_pointerUp,onPointerCancel:_pointerUp,child:RefreshIndicator(onRefresh:_loadPhotos,child:GridView.builder(controller:_scrollController,physics:_isPinching||_isSwipeSelecting?const NeverScrollableScrollPhysics():const AlwaysScrollableScrollPhysics(),padding:const EdgeInsets.all(4),itemCount:_photos.length,gridDelegate:SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount:_crossAxisCount,crossAxisSpacing:4,mainAxisSpacing:4),itemBuilder:(context,index){final photo=_photos[index];final selected=_selectedPhotoIds.contains(photo.id);return GestureDetector(key:_tileKey(index),onTap:()=>_openPhoto(photo,index),onLongPress:()=>_startSelection(photo),child:Stack(fit:StackFit.expand,children:[ClipRRect(borderRadius:BorderRadius.circular(6),child:PhotoThumbnail(photo:photo,token:widget.token)),if(selected)Container(decoration:BoxDecoration(color:Colors.black.withValues(alpha:.35),border:Border.all(color:Theme.of(context).colorScheme.primary,width:3),borderRadius:BorderRadius.circular(6))),if(_isSelectionMode)Positioned(top:6,right:6,child:Container(width:25,height:25,decoration:BoxDecoration(shape:BoxShape.circle,color:selected?Theme.of(context).colorScheme.primary:Colors.black.withValues(alpha:.45),border:Border.all(color:Colors.white,width:2)),child:selected?const Icon(Icons.check,size:17,color:Colors.white):null))]));}))); 
   }
   @override Widget build(BuildContext context)=>Scaffold(appBar:_buildAppBar(),body:_buildBody());
 }
