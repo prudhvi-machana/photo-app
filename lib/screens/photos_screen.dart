@@ -26,7 +26,7 @@ class _PhotosScreenState extends State<PhotosScreen>{
   bool _isLoading=true,_hasLocalPermission=false,_isPinching=false,_pinchDirectionLocked=false,_isSelectionMode=false,_isActionRunning=false,_fastScrolling=false,_isSwipeSelecting=false;
   bool _isLoadingMoreLocal=false,_hasMoreLocal=false;
   String? _errorMessage;int _crossAxisCount=3,_localStart=0,_localTotal=0;
-  double? _pinchStartDistance;int _pinchStartColumns=3;double _lastPinchRatio=1;
+  double? _pinchStartDistance;int _pinchStartColumns=3;double _lastPinchRatio=1;int _pinchAnchorVersion=0;
   String? _swipeStartKey;Offset? _swipePointerStart;bool _swipeDidMove=false;
   static const int _localPageSize=500;static const double _loadMoreThreshold=1400;static const double _pinchThreshold=.10;static const double _headerExtent=46;static const double _fastThumbHeight=72;
 
