@@ -580,14 +580,27 @@ class _VideoViewerState extends State<_VideoViewer> {
     controller?.dispose();
   }
 
+  String _cloudPlaybackUrl() {
+    final photo = widget.item.cloud!;
+    final playbackUrl = photo.playbackUrl;
+    if (playbackUrl != null && playbackUrl.isNotEmpty && photo.playbackStatus == 'ready') {
+      return playbackUrl.startsWith('http') ? playbackUrl : '${ApiConfig.baseUrl}$playbackUrl';
+    }
+    return '${ApiConfig.baseUrl}/photos/${photo.id}';
+  }
+
+  @override
   void _initializeController() {
     _disposeController();
     final generation = _generation;
 
     if (widget.item.isCloud) {
       final controller = VideoPlayerController.networkUrl(
-        Uri.parse('${ApiConfig.baseUrl}/photos/${widget.item.cloud!.id}'),
-        httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
+        Uri.parse(_cloudPlaybackUrl()),
+        httpHeaders: {
+          'Authorization': 'Bearer ${widget.token}',
+          'Accept': 'video/*',
+        },
       );
       _controller = controller;
       _initializeFuture = controller.initialize().then((_) {
