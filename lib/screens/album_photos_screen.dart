@@ -31,6 +31,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
   bool _swipeDidMove=false;
   Set<int> _swipeBaselineSelection={};
   String? _swipeGestureMode;
+  Offset? _swipeLastPosition;
   static const double _selectionDirectionRatio=1.20;
   static const double _pinchThreshold=.10;
 
@@ -57,7 +58,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
 
   void _startSelection(Photo photo){
     final index=_photos.indexOf(photo);
-    setState((){_isSelectionMode=true;_isSwipeSelecting=false;_swipeStartIndex=index<0?null:index;_swipePointerStart=_pointers.isEmpty?null:_pointers.values.first;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection=Set<int>.from(_selectedPhotoIds);_selectedPhotoIds.add(photo.id);});
+    setState((){_isSelectionMode=true;_isSwipeSelecting=false;_swipeStartIndex=index<0?null:index;_swipePointerStart=_pointers.isEmpty?null:_pointers.values.first;_swipeDidMove=false;_swipeGestureMode=null;_swipeLastPosition=_swipePointerStart;_swipeBaselineSelection=Set<int>.from(_selectedPhotoIds);_selectedPhotoIds.add(photo.id);});
   }
 
   void _toggleSelection(Photo photo){
@@ -75,7 +76,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     });
   }
 
-  void _clearSelection(){setState((){_selectedPhotoIds.clear();_isSelectionMode=false;_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection.clear();});}
+  void _clearSelection(){setState((){_selectedPhotoIds.clear();_isSelectionMode=false;_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection.clear();_swipeLastPosition=null;});}
 
   int? _indexAt(Offset globalPosition){
     for(var i=0;i<_photos.length;i++){
@@ -127,7 +128,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     }
     if(_isSelectionMode&&!_isPinching){
       final index=_indexAt(event.position);
-      if(index!=null){_swipeStartIndex=index;_swipePointerStart=event.position;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection=Set<int>.from(_selectedPhotoIds);}
+      if(index!=null){_swipeStartIndex=index;_swipePointerStart=event.position;_swipeDidMove=false;_swipeGestureMode=null;_swipeLastPosition=event.position;_swipeBaselineSelection=Set<int>.from(_selectedPhotoIds);}
     }
   }
 
@@ -160,7 +161,20 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     if(_swipeGestureMode==null){
       final horizontal=delta.dx.abs(),vertical=delta.dy.abs();
       _swipeGestureMode=vertical>horizontal*_selectionDirectionRatio?'scroll':'select';
-      if(_swipeGestureMode=='scroll'){_isSwipeSelecting=false;return;}
+      if(_swipeGestureMode=='scroll'){
+        _isSwipeSelecting=false;
+        _swipeLastPosition=event.position;
+        return;
+      }
+    }
+    if(_swipeGestureMode=='scroll'){
+      if(_swipeLastPosition!=null&&_scrollController.hasClients){
+        final dy=event.position.dy-_swipeLastPosition!.dy;
+        final target=(_scrollController.offset-dy).clamp(0.0,_scrollController.position.maxScrollExtent).toDouble();
+        if((target-_scrollController.offset).abs()>.1)_scrollController.jumpTo(target);
+      }
+      _swipeLastPosition=event.position;
+      return;
     }
     if(_swipeGestureMode!='select')return;
     final index=_indexAt(event.position);
@@ -172,7 +186,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     if(wasSelecting){final index=_indexAt(event.position);if(index!=null)_applySwipeSelection(index);}
     _pointers.remove(event.pointer);
     if(_pointers.length<2&&_isPinching){_pinchStartDistance=null;setState(()=>_isPinching=false);}
-    if(_pointers.isEmpty){_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection.clear();}
+    if(_pointers.isEmpty){_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;_swipeDidMove=false;_swipeGestureMode=null;_swipeBaselineSelection.clear();_swipeLastPosition=null;}
   }
 
   double _distanceBetweenPointers(){if(_pointers.length<2)return 0;final v=_pointers.values.toList();final dx=v[0].dx-v[1].dx,dy=v[0].dy-v[1].dy;return math.sqrt(dx*dx+dy*dy);}
