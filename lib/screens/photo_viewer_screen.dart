@@ -522,7 +522,8 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
   static const double _minScale = 1.0;
   static const double _maxScale = 5.0;
   static const double _doubleTapScale = 2.0;
-  static const double _swipeThreshold = 55.0;
+  static const double _swipeThreshold = 42.0;
+  static const double _swipeVelocityThreshold = 450.0;
 
   late final TransformationController _transformationController;
   late final AnimationController _zoomAnimationController;
@@ -541,7 +542,7 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
     _transformationController = TransformationController();
     _zoomAnimationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 280),
+      duration: const Duration(milliseconds: 300),
     )..addListener(_applyZoomAnimation);
   }
 
@@ -575,7 +576,14 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
   }
 
   void _handleDoubleTap(TapDownDetails details) {
+    if (_zoomAnimationController.isAnimating) {
+      _animateTo(Matrix4.identity());
+      return;
+    }
+
     if (_scale > 1.01) {
+      // Always animate from the current transform all the way back to a
+      // clean identity matrix instead of resetting it instantly.
       _animateTo(Matrix4.identity());
       return;
     }
@@ -613,7 +621,9 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
     if (_gestureStartScale <= 1.01 && !_pinchStarted) {
       if (details.pointerCount == 1) {
         _horizontalSwipeDistance = focalDelta.dx;
-        _hasDragged = focalDelta.distance > 8;
+        _hasDragged =
+            focalDelta.distance > 6 &&
+            focalDelta.dx.abs() >= focalDelta.dy.abs() * 0.8;
       }
       return;
     }
@@ -637,8 +647,13 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
 
   void _handleScaleEnd(ScaleEndDetails details) {
     if (_gestureStartScale <= 1.01 && !_pinchStarted) {
-      if (_hasDragged && _horizontalSwipeDistance.abs() >= _swipeThreshold) {
-        if (_horizontalSwipeDistance < 0) {
+      final velocity = details.velocity.pixelsPerSecond.dx;
+      final distanceTriggered = _hasDragged && _horizontalSwipeDistance.abs() >= _swipeThreshold;
+      final velocityTriggered =
+          _hasDragged && velocity.abs() >= _swipeVelocityThreshold;
+
+      if (distanceTriggered || velocityTriggered) {
+        if (_horizontalSwipeDistance < 0 || velocity < -_swipeVelocityThreshold) {
           widget.onSwipeNext();
         } else {
           widget.onSwipePrevious();
