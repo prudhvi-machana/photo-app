@@ -381,10 +381,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
               return _ImageViewer(
                 item: item,
                 token: widget.token,
-                onInteractionStart: (details) {
-                  if (details.pointerCount >= 2) _setImageInteraction(true);
-                },
-                onInteractionEnd: (_) => _setImageInteraction(false),
+                onZoomChanged: _setImageInteraction,
               );
             },
           ),
@@ -490,30 +487,108 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-class _ImageViewer extends StatelessWidget {
+class _ImageViewer extends StatefulWidget {
   final _ViewerItem item;
   final String token;
-  final GestureScaleStartCallback? onInteractionStart;
-  final GestureScaleEndCallback? onInteractionEnd;
+  final ValueChanged<bool> onZoomChanged;
 
-  const _ImageViewer({required this.item, required this.token, required this.onInteractionStart, required this.onInteractionEnd});
+  const _ImageViewer({
+    required this.item,
+    required this.token,
+    required this.onZoomChanged,
+  });
+
+  @override
+  State<_ImageViewer> createState() => _ImageViewerState();
+}
+
+class _ImageViewerState extends State<_ImageViewer> {
+  static const double _minScale = 1.0;
+  static const double _maxScale = 5.0;
+  static const double _doubleTapScale = 2.5;
+
+  late final TransformationController _transformationController;
+  bool _isZoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _transformationController = TransformationController();
+  }
+
+  @override
+  void dispose() {
+    _transformationController.dispose();
+    super.dispose();
+  }
+
+  void _setZoomed(bool zoomed) {
+    if (_isZoomed == zoomed) return;
+    _isZoomed = zoomed;
+    widget.onZoomChanged(zoomed);
+  }
+
+  void _updateZoomState() {
+    final matrix = _transformationController.value;
+    final scale = matrix.getMaxScaleOnAxis();
+    _setZoomed(scale > 1.01);
+  }
+
+  void _handleInteractionStart(ScaleStartDetails details) {
+    // Once an image gesture starts, temporarily give the gesture to the
+    // image viewer so a pinch cannot accidentally move the PageView.
+    _setZoomed(true);
+  }
+
+  void _handleInteractionUpdate(ScaleUpdateDetails details) {
+    _updateZoomState();
+  }
+
+  void _handleInteractionEnd(ScaleEndDetails details) {
+    _updateZoomState();
+  }
+
+  void _handleDoubleTap(TapDownDetails details) {
+    final currentScale = _transformationController.value.getMaxScaleOnAxis();
+
+    if (currentScale > 1.01) {
+      _transformationController.value = Matrix4.identity();
+      _setZoomed(false);
+      return;
+    }
+
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final localPosition = box.globalToLocal(details.globalPosition);
+    final size = box.size;
+    final center = Offset(size.width / 2, size.height / 2);
+    final focalPoint = localPosition - center;
+
+    final matrix = Matrix4.identity()
+      ..translate(focalPoint.dx, focalPoint.dy)
+      ..scale(_doubleTapScale)
+      ..translate(-focalPoint.dx, -focalPoint.dy);
+
+    _transformationController.value = matrix;
+    _setZoomed(true);
+  }
 
   @override
   Widget build(BuildContext context) {
     final Widget image;
-    if (!item.isCloud) {
+    if (!widget.item.isCloud) {
       image = AssetEntityImage(
-        item.local!.asset,
+        widget.item.local!.asset,
         isOriginal: true,
         fit: BoxFit.contain,
         width: double.infinity,
         height: double.infinity,
       );
     } else {
-      final photo = item.cloud!;
+      final photo = widget.item.cloud!;
       image = Image.network(
         '${ApiConfig.baseUrl}/photos/${photo.id}',
-        headers: {'Authorization': 'Bearer $token'},
+        headers: {'Authorization': 'Bearer ${widget.token}'},
         fit: BoxFit.contain,
         width: double.infinity,
         height: double.infinity,
@@ -523,14 +598,18 @@ class _ImageViewer extends StatelessWidget {
     }
 
     return GestureDetector(
-      onScaleStart: onInteractionStart,
-      onScaleEnd: onInteractionEnd,
-      child: SizedBox.expand(
-        child: InteractiveViewer(
-          minScale: 1,
-          maxScale: 5,
-          child: SizedBox.expand(child: image),
-        ),
+      behavior: HitTestBehavior.opaque,
+      onDoubleTapDown: _handleDoubleTap,
+      child: InteractiveViewer(
+        transformationController: _transformationController,
+        minScale: _minScale,
+        maxScale: _maxScale,
+        panEnabled: true,
+        scaleEnabled: true,
+        onInteractionStart: _handleInteractionStart,
+        onInteractionUpdate: _handleInteractionUpdate,
+        onInteractionEnd: _handleInteractionEnd,
+        child: SizedBox.expand(child: image),
       ),
     );
   }
@@ -589,7 +668,6 @@ class _VideoViewerState extends State<_VideoViewer> {
     return '${ApiConfig.baseUrl}/photos/${photo.id}';
   }
 
-  @override
   void _initializeController() {
     _disposeController();
     final generation = _generation;
