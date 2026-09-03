@@ -371,7 +371,13 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
             onPageChanged: (index) => setState(() => _currentIndex = index),
             itemBuilder: (context, index) {
               final item = _items[index];
-              if (_isVideo(item)) return _VideoViewer(item: item, token: widget.token);
+              if (_isVideo(item)) {
+                return _VideoViewer(
+                  item: item,
+                  token: widget.token,
+                  isActive: index == _currentIndex,
+                );
+              }
               return _ImageViewer(
                 item: item,
                 token: widget.token,
@@ -533,8 +539,9 @@ class _ImageViewer extends StatelessWidget {
 class _VideoViewer extends StatefulWidget {
   final _ViewerItem item;
   final String token;
+  final bool isActive;
 
-  const _VideoViewer({required this.item, required this.token});
+  const _VideoViewer({required this.item, required this.token, required this.isActive});
 
   @override
   State<_VideoViewer> createState() => _VideoViewerState();
@@ -544,28 +551,70 @@ class _VideoViewerState extends State<_VideoViewer> {
   VideoPlayerController? _controller;
   Future<void>? _initializeFuture;
   double _speed = 1.0;
+  int _generation = 0;
 
   @override
   void initState() {
     super.initState();
+    if (widget.isActive) _initializeController();
+  }
+
+  @override
+  void didUpdateWidget(covariant _VideoViewer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isActive == widget.isActive) return;
+
+    if (widget.isActive) {
+      _initializeController();
+    } else {
+      _disposeController();
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _disposeController() {
+    _generation++;
+    final controller = _controller;
+    _controller = null;
+    _initializeFuture = null;
+    controller?.dispose();
+  }
+
+  void _initializeController() {
+    _disposeController();
+    final generation = _generation;
+
     if (widget.item.isCloud) {
-      _controller = VideoPlayerController.networkUrl(
+      final controller = VideoPlayerController.networkUrl(
         Uri.parse('${ApiConfig.baseUrl}/photos/${widget.item.cloud!.id}'),
         httpHeaders: {'Authorization': 'Bearer ${widget.token}'},
       );
-      _initializeFuture = _controller!.initialize();
+      _controller = controller;
+      _initializeFuture = controller.initialize().then((_) {
+        if (generation != _generation) return;
+        if (mounted) setState(() {});
+      });
     } else {
-      _initializeFuture = widget.item.local!.asset.file.then((file) {
+      _initializeFuture = widget.item.local!.asset.file.then((file) async {
         if (file == null) throw Exception('Unable to access video file');
-        _controller = VideoPlayerController.file(file);
-        return _controller!.initialize();
+        if (generation != _generation) return;
+        final controller = VideoPlayerController.file(file);
+        _controller = controller;
+        await controller.initialize();
+        if (generation != _generation) {
+          await controller.dispose();
+          return;
+        }
+        if (mounted) setState(() {});
       });
     }
+
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _controller?.dispose();
+    _disposeController();
     super.dispose();
   }
 
@@ -592,20 +641,29 @@ class _VideoViewerState extends State<_VideoViewer> {
         ),
       ),
     );
-    if (speed == null) return;
+    if (speed == null || !mounted) return;
     setState(() => _speed = speed);
     await controller.setPlaybackSpeed(speed);
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!widget.isActive) {
+      return const Center(child: Icon(Icons.play_circle_outline, color: Colors.white54, size: 56));
+    }
+
+    final future = _initializeFuture;
+    final controller = _controller;
+    if (future == null || controller == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return FutureBuilder<void>(
-      future: _initializeFuture,
+      future: future,
       builder: (context, snapshot) {
         if (snapshot.hasError) return const Center(child: Text('Unable to play video.', style: TextStyle(color: Colors.white)));
-        if (snapshot.connectionState != ConnectionState.done || _controller == null) return const Center(child: CircularProgressIndicator());
+        if (snapshot.connectionState != ConnectionState.done || !controller.value.isInitialized) return const Center(child: CircularProgressIndicator());
 
-        final controller = _controller!;
         return Column(
           children: [
             Expanded(child: Center(child: AspectRatio(aspectRatio: controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio, child: VideoPlayer(controller)))),
