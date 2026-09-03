@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -56,7 +58,6 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
   final Set<String> _favoriteLocalIds = {};
 
   int _currentIndex = 0;
-  bool _isInteractingWithImage = false;
   bool _isActionRunning = false;
   bool _detailsOpen = false;
 
@@ -281,10 +282,22 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
     }
   }
 
-  void _setImageInteraction(bool active) {
-    if (_isInteractingWithImage != active && mounted) {
-      setState(() => _isInteractingWithImage = active);
-    }
+  void _goToPrevious() {
+    if (_currentIndex <= 0 || !_pageController.hasClients) return;
+    _pageController.animateToPage(
+      _currentIndex - 1,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _goToNext() {
+    if (_currentIndex >= _items.length - 1 || !_pageController.hasClients) return;
+    _pageController.animateToPage(
+      _currentIndex + 1,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   String _formatBytes(int bytes) {
@@ -342,6 +355,8 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
     }
 
     final currentItem = _currentItem;
+    final currentIsImage = !_isVideo(currentItem);
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -367,7 +382,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
           PageView.builder(
             controller: _pageController,
             itemCount: _items.length,
-            physics: _isInteractingWithImage ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
+            physics: currentIsImage ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
             onPageChanged: (index) => setState(() => _currentIndex = index),
             itemBuilder: (context, index) {
               final item = _items[index];
@@ -381,7 +396,8 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
               return _ImageViewer(
                 item: item,
                 token: widget.token,
-                onZoomChanged: _setImageInteraction,
+                onSwipePrevious: _goToPrevious,
+                onSwipeNext: _goToNext,
               );
             },
           ),
@@ -490,126 +506,193 @@ class _DetailRow extends StatelessWidget {
 class _ImageViewer extends StatefulWidget {
   final _ViewerItem item;
   final String token;
-  final ValueChanged<bool> onZoomChanged;
+  final VoidCallback onSwipePrevious;
+  final VoidCallback onSwipeNext;
 
   const _ImageViewer({
     required this.item,
     required this.token,
-    required this.onZoomChanged,
+    required this.onSwipePrevious,
+    required this.onSwipeNext,
   });
 
   @override
   State<_ImageViewer> createState() => _ImageViewerState();
 }
 
-class _ImageViewerState extends State<_ImageViewer> {
+class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderStateMixin {
   static const double _minScale = 1.0;
   static const double _maxScale = 5.0;
-  static const double _doubleTapScale = 2.5;
+  static const double _doubleTapScale = 2.0;
+  static const double _swipeThreshold = 55.0;
 
   late final TransformationController _transformationController;
-  bool _isZoomed = false;
+  late final AnimationController _zoomAnimationController;
+
+  Matrix4 _gestureStartMatrix = Matrix4.identity();
+  Offset _gestureStartFocalPoint = Offset.zero;
+  double _gestureStartScale = 1.0;
+  double _horizontalSwipeDistance = 0.0;
+  bool _pinchStarted = false;
+  bool _hasDragged = false;
 
   @override
   void initState() {
     super.initState();
     _transformationController = TransformationController();
+    _zoomAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+    )..addListener(_applyZoomAnimation);
   }
 
   @override
   void dispose() {
+    _zoomAnimationController.dispose();
     _transformationController.dispose();
     super.dispose();
   }
 
-  void _setZoomed(bool zoomed) {
-    if (_isZoomed == zoomed) return;
-    _isZoomed = zoomed;
-    widget.onZoomChanged(zoomed);
+  double get _scale => _transformationController.value.getMaxScaleOnAxis();
+
+  void _applyZoomAnimation() {
+    final animation = _zoomAnimation;
+    if (animation == null) return;
+    _transformationController.value = animation.value;
   }
 
-  void _updateZoomState() {
-    final matrix = _transformationController.value;
-    final scale = matrix.getMaxScaleOnAxis();
-    _setZoomed(scale > 1.01);
-  }
+  Animation<Matrix4>? _zoomAnimation;
 
-  void _handleInteractionStart(ScaleStartDetails details) {
-    // Once an image gesture starts, temporarily give the gesture to the
-    // image viewer so a pinch cannot accidentally move the PageView.
-    _setZoomed(true);
-  }
-
-  void _handleInteractionUpdate(ScaleUpdateDetails details) {
-    _updateZoomState();
-  }
-
-  void _handleInteractionEnd(ScaleEndDetails details) {
-    _updateZoomState();
+  void _animateTo(Matrix4 target) {
+    _zoomAnimationController.stop();
+    _zoomAnimationController.reset();
+    _zoomAnimation = Matrix4Tween(
+      begin: _transformationController.value.clone(),
+      end: target,
+    ).animate(CurvedAnimation(
+      parent: _zoomAnimationController,
+      curve: Curves.easeOutCubic,
+    ));
+    _zoomAnimationController.forward();
   }
 
   void _handleDoubleTap(TapDownDetails details) {
-    final currentScale = _transformationController.value.getMaxScaleOnAxis();
-
+    final currentScale = _scale;
     if (currentScale > 1.01) {
-      _transformationController.value = Matrix4.identity();
-      _setZoomed(false);
+      _animateTo(Matrix4.identity());
       return;
     }
 
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return;
     final localPosition = box.globalToLocal(details.globalPosition);
-    final size = box.size;
-    final center = Offset(size.width / 2, size.height / 2);
+    final center = box.size.center(Offset.zero);
     final focalPoint = localPosition - center;
 
-    final matrix = Matrix4.identity()
+    final target = Matrix4.identity()
       ..translate(focalPoint.dx, focalPoint.dy)
       ..scale(_doubleTapScale)
       ..translate(-focalPoint.dx, -focalPoint.dy);
-
-    _transformationController.value = matrix;
-    _setZoomed(true);
+    _animateTo(target);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final Widget image;
+  void _handleScaleStart(ScaleStartDetails details) {
+    _zoomAnimationController.stop();
+    _gestureStartMatrix = _transformationController.value.clone();
+    _gestureStartFocalPoint = details.focalPoint;
+    _gestureStartScale = _scale;
+    _horizontalSwipeDistance = 0.0;
+    _pinchStarted = false;
+    _hasDragged = false;
+  }
+
+  void _handleScaleUpdate(ScaleUpdateDetails details) {
+    if (details.pointerCount >= 2) {
+      _pinchStarted = true;
+    }
+
+    final focalDelta = details.focalPoint - _gestureStartFocalPoint;
+
+    if (_gestureStartScale <= 1.01 && !_pinchStarted) {
+      if (details.pointerCount == 1) {
+        _horizontalSwipeDistance = focalDelta.dx;
+        _hasDragged = focalDelta.distance > 8;
+      }
+      return;
+    }
+
+    final desiredScale = (_gestureStartScale * details.scale).clamp(_minScale, _maxScale);
+    final appliedScale = desiredScale / _gestureStartScale;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+
+    final center = box.size.center(Offset.zero);
+    final focal = details.focalPoint - center;
+    final matrix = _gestureStartMatrix.clone()
+      ..translate(focalDelta.dx, focalDelta.dy)
+      ..translate(focal.dx, focal.dy)
+      ..scale(appliedScale)
+      ..translate(-focal.dx, -focal.dy);
+
+    _transformationController.value = matrix;
+    _hasDragged = true;
+  }
+
+  void _handleScaleEnd(ScaleEndDetails details) {
+    if (_gestureStartScale <= 1.01 && !_pinchStarted) {
+      if (_hasDragged && _horizontalSwipeDistance.abs() >= _swipeThreshold) {
+        if (_horizontalSwipeDistance < 0) {
+          widget.onSwipeNext();
+        } else {
+          widget.onSwipePrevious();
+        }
+      }
+      _horizontalSwipeDistance = 0.0;
+      return;
+    }
+
+    if (_scale < 1.01) {
+      _animateTo(Matrix4.identity());
+    }
+  }
+
+  Widget _buildImage() {
     if (!widget.item.isCloud) {
-      image = AssetEntityImage(
+      return AssetEntityImage(
         widget.item.local!.asset,
         isOriginal: true,
         fit: BoxFit.contain,
         width: double.infinity,
         height: double.infinity,
       );
-    } else {
-      final photo = widget.item.cloud!;
-      image = Image.network(
-        '${ApiConfig.baseUrl}/photos/${photo.id}',
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-        fit: BoxFit.contain,
-        width: double.infinity,
-        height: double.infinity,
-        errorBuilder: (context, error, stackTrace) => const Center(child: Icon(Icons.broken_image_outlined, color: Colors.white54, size: 56)),
-        loadingBuilder: (context, child, progress) => progress == null ? child : const Center(child: CircularProgressIndicator()),
-      );
     }
 
+    final photo = widget.item.cloud!;
+    return Image.network(
+      '${ApiConfig.baseUrl}/photos/${photo.id}',
+      headers: {'Authorization': 'Bearer ${widget.token}'},
+      fit: BoxFit.contain,
+      width: double.infinity,
+      height: double.infinity,
+      errorBuilder: (context, error, stackTrace) => const Center(child: Icon(Icons.broken_image_outlined, color: Colors.white54, size: 56)),
+      loadingBuilder: (context, child, progress) => progress == null ? child : const Center(child: CircularProgressIndicator()),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onDoubleTapDown: _handleDoubleTap,
-      child: InteractiveViewer(
-        transformationController: _transformationController,
-        minScale: _minScale,
-        maxScale: _maxScale,
-        panEnabled: true,
-        scaleEnabled: true,
-        onInteractionStart: _handleInteractionStart,
-        onInteractionUpdate: _handleInteractionUpdate,
-        onInteractionEnd: _handleInteractionEnd,
-        child: SizedBox.expand(child: image),
+      onScaleStart: _handleScaleStart,
+      onScaleUpdate: _handleScaleUpdate,
+      onScaleEnd: _handleScaleEnd,
+      child: ClipRect(
+        child: Transform(
+          alignment: Alignment.center,
+          transform: _transformationController.value,
+          child: SizedBox.expand(child: _buildImage()),
+        ),
       ),
     );
   }
@@ -728,7 +811,14 @@ class _VideoViewerState extends State<_VideoViewer> {
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [for (final value in [0.5, 1.0, 1.5, 2.0]) ListTile(title: Text('${value}x'), trailing: _speed == value ? const Icon(Icons.check) : null, onTap: () => Navigator.pop(context, value))],
+          children: [
+            for (final value in [0.5, 1.0, 1.5, 2.0])
+              ListTile(
+                title: Text('${value}x'),
+                trailing: _speed == value ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.pop(context, value),
+              ),
+          ],
         ),
       ),
     );
