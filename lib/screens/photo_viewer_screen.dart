@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -535,6 +533,7 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
   double _horizontalSwipeDistance = 0.0;
   bool _pinchStarted = false;
   bool _hasDragged = false;
+  Animation<Matrix4>? _zoomAnimation;
 
   @override
   void initState() {
@@ -557,11 +556,10 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
 
   void _applyZoomAnimation() {
     final animation = _zoomAnimation;
-    if (animation == null) return;
-    _transformationController.value = animation.value;
+    if (animation != null) {
+      _transformationController.value = animation.value;
+    }
   }
-
-  Animation<Matrix4>? _zoomAnimation;
 
   void _animateTo(Matrix4 target) {
     _zoomAnimationController.stop();
@@ -577,8 +575,7 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
   }
 
   void _handleDoubleTap(TapDownDetails details) {
-    final currentScale = _scale;
-    if (currentScale > 1.01) {
+    if (_scale > 1.01) {
       _animateTo(Matrix4.identity());
       return;
     }
@@ -688,9 +685,13 @@ class _ImageViewerState extends State<_ImageViewer> with SingleTickerProviderSta
       onScaleUpdate: _handleScaleUpdate,
       onScaleEnd: _handleScaleEnd,
       child: ClipRect(
-        child: Transform(
-          alignment: Alignment.center,
-          transform: _transformationController.value,
+        child: ValueListenableBuilder<Matrix4>(
+          valueListenable: _transformationController,
+          builder: (context, matrix, child) => Transform(
+            alignment: Alignment.center,
+            transform: matrix,
+            child: child,
+          ),
           child: SizedBox.expand(child: _buildImage()),
         ),
       ),
