@@ -28,6 +28,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
   double? _pinchStartDistance;
   double _lastPinchRatio=1;
   int? _swipeStartIndex;
+  Offset? _swipePointerStart;
   bool _swipeDidMove=false;
   static const double _pinchThreshold=.10;
 
@@ -54,7 +55,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
 
   void _startSelection(Photo photo){
     final index=_photos.indexOf(photo);
-    setState((){_isSelectionMode=true;_isSwipeSelecting=true;_swipeStartIndex=index<0?null:index;_swipeDidMove=false;_selectedPhotoIds.add(photo.id);});
+    setState((){_isSelectionMode=true;_isSwipeSelecting=true;_swipeStartIndex=index<0?null:index;_swipePointerStart=_pointers.isEmpty?null:_pointers.values.first;_swipeDidMove=false;_selectedPhotoIds.add(photo.id);});
   }
 
   void _toggleSelection(Photo photo){
@@ -72,7 +73,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     });
   }
 
-  void _clearSelection(){setState((){_selectedPhotoIds.clear();_isSelectionMode=false;_isSwipeSelecting=false;_swipeStartIndex=null;});}
+  void _clearSelection(){setState((){_selectedPhotoIds.clear();_isSelectionMode=false;_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;});}
 
   int? _indexAt(Offset globalPosition){
     for(var i=0;i<_photos.length;i++){
@@ -123,7 +124,7 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
     }
     if(_isSelectionMode&&!_isPinching){
       final index=_indexAt(event.position);
-      if(index!=null){_swipeStartIndex=index;_swipeDidMove=false;}
+      if(index!=null){_swipeStartIndex=index;_swipePointerStart=event.position;_swipeDidMove=false;}
     }
   }
 
@@ -149,18 +150,19 @@ class _AlbumPhotosScreenState extends State<AlbumPhotosScreen>{
       });
       return;
     }
-    if(_isSelectionMode&&!_isPinching&&_swipeStartIndex!=null){
-      final index=_indexAt(event.position);
-      if(index==null)return;
-      if((event.position-_pointers.values.first).distance>6)_swipeDidMove=true;
-      if(_swipeDidMove){_isSwipeSelecting=true;_selectSwipeRange(_swipeStartIndex!,index);}
+    if(_isSelectionMode&&!_isPinching&&_swipeStartIndex!=null&&_swipePointerStart!=null){
+      if((event.position-_swipePointerStart!).distance>6)_swipeDidMove=true;
+      if(_swipeDidMove){
+        final index=_indexAt(event.position);
+        if(index!=null){_isSwipeSelecting=true;_selectSwipeRange(_swipeStartIndex!,index);}
+      }
     }
   }
 
   void _pointerUp(PointerEvent event){
     _pointers.remove(event.pointer);
     if(_pointers.length<2&&_isPinching){_pinchStartDistance=null;setState(()=>_isPinching=false);}
-    if(_pointers.isEmpty){_isSwipeSelecting=false;_swipeStartIndex=null;_swipeDidMove=false;}
+    if(_pointers.isEmpty){_isSwipeSelecting=false;_swipeStartIndex=null;_swipePointerStart=null;_swipeDidMove=false;}
   }
 
   double _distanceBetweenPointers(){if(_pointers.length<2)return 0;final v=_pointers.values.toList();final dx=v[0].dx-v[1].dx,dy=v[0].dy-v[1].dy;return math.sqrt(dx*dx+dy*dy);}
